@@ -7,7 +7,7 @@ from app.agent.schemas import AUTHORITY_ASSESSMENT_SCHEMA
 from app.config import Settings
 from app.models import AuthorityAssessment, ChangeEvent
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 
 class AuthorityAssessor(Protocol):

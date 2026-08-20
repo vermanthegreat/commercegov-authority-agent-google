@@ -9,7 +9,7 @@ from app.services.event_parser import EventParseError, parse_change_event
 from app.services.firestore_store import RunStore, is_terminal
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 
 def terminal_status(event: ChangeEvent, assessment: AuthorityAssessment) -> WorkflowStatus:

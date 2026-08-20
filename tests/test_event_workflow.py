@@ -28,7 +28,7 @@ def test_human_requirement_cannot_be_bypassed_by_model(app_with_fake, event_payl
 def test_terminal_replay_does_not_invoke_model_again(app_with_fake, event_payload, caplog):
     app, _, assessor = app_with_fake
     client = TestClient(app)
-    caplog.set_level(logging.INFO, logger="app.routes.events")
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
     first = client.post("/events/change", json=event_payload)
     replay = client.post("/events/change", json=event_payload)
     assert first.status_code == replay.status_code == 200

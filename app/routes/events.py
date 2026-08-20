@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -8,6 +9,7 @@ from app.services.event_parser import EventParseError, parse_change_event
 from app.services.firestore_store import RunStore, is_terminal
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def terminal_status(event: ChangeEvent, assessment: AuthorityAssessment) -> WorkflowStatus:
@@ -25,6 +27,7 @@ def terminal_status(event: ChangeEvent, assessment: AuthorityAssessment) -> Work
 async def process_event(event: ChangeEvent, store: RunStore, assessor: AuthorityAssessor) -> dict[str, Any]:
     existing = store.get(event.event_id)
     if existing and is_terminal(existing):
+        logger.info("authority_terminal_replay event_id=%s", event.event_id)
         return existing
     store.record_received(event)
     store.update(event.event_id, status=WorkflowStatus.PROCESSING.value)

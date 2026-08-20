@@ -1,10 +1,13 @@
 import json
+import logging
 from typing import Protocol
 
 from app.agent.prompts import AUTHORITY_AGENT_INSTRUCTION
 from app.agent.schemas import AUTHORITY_ASSESSMENT_SCHEMA
 from app.config import Settings
 from app.models import AuthorityAssessment, ChangeEvent
+
+logger = logging.getLogger(__name__)
 
 
 class AuthorityAssessor(Protocol):
@@ -35,6 +38,7 @@ class AdkGeminiAuthorityAssessor:
 
     async def assess(self, event: ChangeEvent) -> AuthorityAssessment:
         # ADK uses ADC / Google Cloud configuration; no credentials are supplied here.
+        from google.adk.agents.run_config import RunConfig
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
@@ -53,10 +57,12 @@ class AdkGeminiAuthorityAssessor:
         )
         payload = json.dumps(event.model_dump(mode="json"), separators=(",", ":"))
         final_text: str | None = None
+        logger.info("authority_model_invocation event_id=%s", event.event_id)
         async for agent_event in runner.run_async(
             user_id="event-processor",
             session_id=session.id,
             new_message=types.Content(parts=[types.Part(text=payload)]),
+            run_config=RunConfig(max_llm_calls=1),
         ):
             if agent_event.is_final_response() and agent_event.content:
                 final_text = "".join(part.text or "" for part in agent_event.content.parts)

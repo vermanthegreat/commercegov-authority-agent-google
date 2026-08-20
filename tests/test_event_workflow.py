@@ -1,3 +1,5 @@
+import logging
+
 from fastapi.testclient import TestClient
 
 from app.models import Classification, RecommendedNextAction, WorkflowStatus
@@ -23,11 +25,13 @@ def test_human_requirement_cannot_be_bypassed_by_model(app_with_fake, event_payl
     assert response.json()["classification"] == Classification.HUMAN_AUTHORITY_REQUIRED.value
 
 
-def test_terminal_replay_does_not_invoke_model_again(app_with_fake, event_payload):
+def test_terminal_replay_does_not_invoke_model_again(app_with_fake, event_payload, caplog):
     app, _, assessor = app_with_fake
     client = TestClient(app)
+    caplog.set_level(logging.INFO, logger="app.routes.events")
     first = client.post("/events/change", json=event_payload)
     replay = client.post("/events/change", json=event_payload)
     assert first.status_code == replay.status_code == 200
     assert replay.json() == first.json()
     assert assessor.calls == 1
+    assert "authority_terminal_replay event_id=evt_001" in caplog.messages

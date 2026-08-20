@@ -66,6 +66,7 @@ provision infrastructure.
 | --- | --- |
 | `GOOGLE_CLOUD_PROJECT` | GCP project for ADC-backed Google clients |
 | `GOOGLE_CLOUD_LOCATION` | Gemini/Agent Platform location (default `us-central1`) |
+| `GOOGLE_GENAI_USE_VERTEXAI` | Set to `True` to select the Vertex AI Gemini backend |
 | `GEMINI_MODEL` | ADK Gemini model (default `gemini-2.5-flash`) |
 | `FIRESTORE_DATABASE` | Firestore database ID (default `(default)`) |
 | `USE_IN_MEMORY_STORE` | Local-only persistence switch |
@@ -80,11 +81,12 @@ gcloud run deploy commercegov-authority-agent \
   --no-allow-unauthenticated --min-instances 0
 ```
 
-Use a runtime service account with Firestore and Vertex AI permissions, supply
-the environment variables above, and configure an authenticated Pub/Sub push
-subscription to `POST /events/change`. Cloud Run provides `PORT`; the image
-binds `0.0.0.0:$PORT`. Keep min instances at zero, use no GPU, and retain one
-Gemini invocation per unique event.
+Use an attached Cloud Run runtime service account with Firestore and Vertex AI
+permissions. Authentication uses Application Default Credentials; no
+service-account JSON key or `GOOGLE_APPLICATION_CREDENTIALS` is required. Set
+`GOOGLE_GENAI_USE_VERTEXAI=True` along with the environment variables above.
+Cloud Run provides `PORT`; the image binds `0.0.0.0:$PORT`. Keep min instances
+at zero, use no GPU, and retain one Gemini invocation per unique event.
 
 ## Current implementation status
 

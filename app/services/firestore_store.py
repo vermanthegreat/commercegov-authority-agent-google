@@ -14,6 +14,8 @@ class RunStore(Protocol):
     def mark_assessment_unknown(self, event_id: str, owner_id: str, attempt: int, reason: str) -> dict[str, Any]: ...
     def settle(self, event_id: str, owner_id: str, attempt: int, **fields: Any) -> dict[str, Any]: ...
     def release_claim(self, event_id: str, owner_id: str, attempt: int) -> dict[str, Any]: ...
+    def list_events(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
+    def get_stats(self) -> dict[str, int]: ...
 
 
 def _now() -> str:
@@ -125,6 +127,27 @@ class InMemoryRunStore:
                 raise RuntimeError("Settlement requires ASSESSING state")
             existing.update(deepcopy(fields) | {"updated_at": _now()})
             return deepcopy(existing)
+
+    def list_events(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        with self._lock:
+            # Sort by created_at descending (newest first)
+            sorted_runs = sorted(self.runs.values(), key=lambda r: r.get("created_at", ""), reverse=True)
+            return [deepcopy(r) for r in sorted_runs[offset:offset+limit]]
+
+    def get_stats(self) -> dict[str, int]:
+        with self._lock:
+            total = len(self.runs)
+            processing = sum(1 for r in self.runs.values() if r.get("status") == WorkflowStatus.PROCESSING.value)
+            assessing = sum(1 for r in self.runs.values() if r.get("status") == WorkflowStatus.ASSESSING.value)
+            terminal = sum(1 for r in self.runs.values() if r.get("status") in {s.value for s in TERMINAL_STATUSES})
+            proposals = sum(1 for r in self.runs.values() if r.get("proposal_id"))
+            return {
+                "events_total": total,
+                "events_processing": processing,
+                "events_assessing": assessing,
+                "events_terminal": terminal,
+                "proposals_total": proposals,
+            }
 
     def _owned_active(self, event_id: str, owner_id: str, attempt: int, status: WorkflowStatus) -> dict[str, Any]:
         if event_id not in self.runs:
@@ -286,6 +309,29 @@ class FirestoreRunStore:
             return existing
 
         return _transactional_settle(self._client.transaction())
+
+    def list_events(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        from google.cloud import firestore
+        query = self._client.collection(self._collection).order_by("created_at", direction=firestore.Query.DESCENDING).offset(offset).limit(limit)
+        return [doc.to_dict() for doc in query.stream()]
+
+    def get_stats(self) -> dict[str, int]:
+        # Using aggregation queries for stats where possible
+        # Or retrieving all documents in a very unoptimized way for the hackathon
+        # Since this is a hackathon, we might want to do it simply
+        docs = [doc.to_dict() for doc in self._client.collection(self._collection).stream()]
+        total = len(docs)
+        processing = sum(1 for r in docs if r.get("status") == WorkflowStatus.PROCESSING.value)
+        assessing = sum(1 for r in docs if r.get("status") == WorkflowStatus.ASSESSING.value)
+        terminal = sum(1 for r in docs if r.get("status") in {s.value for s in TERMINAL_STATUSES})
+        proposals = sum(1 for r in docs if r.get("proposal_id"))
+        return {
+            "events_total": total,
+            "events_processing": processing,
+            "events_assessing": assessing,
+            "events_terminal": terminal,
+            "proposals_total": proposals,
+        }
 
 
 def _require_owner(run: dict[str, Any], owner_id: str, attempt: int) -> None:

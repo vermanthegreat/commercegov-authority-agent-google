@@ -184,3 +184,23 @@ async def post_change(request: Request) -> dict[str, Any]:
         return await process_event(event, request.app.state.run_store, request.app.state.assessor, request.app.state.commercegov_client)
     except RuntimeError:
         raise HTTPException(status_code=502, detail="Authority assessment failed")
+
+@router.get("/runs")
+async def list_runs(request: Request, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    # Simple operational projection endpoint for CommerceGov Agent Runs M1
+    store: RunStore = request.app.state.run_store
+    return store.list_events(limit=limit, offset=offset)
+
+@router.get("/runs/stats")
+async def get_stats(request: Request) -> dict[str, int]:
+    # Simple operational projection endpoint for CommerceGov Agent Runs M1
+    store: RunStore = request.app.state.run_store
+    return store.get_stats()
+
+@router.get("/runs/{event_id}")
+async def get_run(request: Request, event_id: str) -> dict[str, Any]:
+    store: RunStore = request.app.state.run_store
+    run = store.get(event_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run

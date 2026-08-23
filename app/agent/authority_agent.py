@@ -10,6 +10,11 @@ from app.models import AuthorityAssessment, ChangeEvent
 logger = logging.getLogger("uvicorn.error")
 
 
+class TransientPreAssessmentError(Exception):
+    """A clearly transient failure before an authority outcome could have been produced."""
+    pass
+
+
 class AuthorityAssessor(Protocol):
     async def assess(self, event: ChangeEvent) -> AuthorityAssessment: ...
 
@@ -58,14 +63,24 @@ class AdkGeminiAuthorityAssessor:
         payload = json.dumps(event.model_dump(mode="json"), separators=(",", ":"))
         final_text: str | None = None
         logger.info("authority_model_invocation event_id=%s", event.event_id)
-        async for agent_event in runner.run_async(
-            user_id="event-processor",
-            session_id=session.id,
-            new_message=types.Content(parts=[types.Part(text=payload)]),
-            run_config=RunConfig(max_llm_calls=1),
-        ):
-            if agent_event.is_final_response() and agent_event.content:
-                final_text = "".join(part.text or "" for part in agent_event.content.parts)
+        
+        try:
+            async for agent_event in runner.run_async(
+                user_id="event-processor",
+                session_id=session.id,
+                new_message=types.Content(parts=[types.Part(text=payload)]),
+                run_config=RunConfig(max_llm_calls=1),
+            ):
+                if agent_event.is_final_response() and agent_event.content:
+                    final_text = "".join(part.text or "" for part in agent_event.content.parts)
+        except Exception as exc:
+            # We treat transport/connection errors before any outcome as transient.
+            # E.g. generic transport errors or API core ServiceUnavailable.
+            error_str = str(exc).lower()
+            if "transport" in error_str or "unavailable" in error_str or "timeout" in error_str or "connection" in error_str:
+                raise TransientPreAssessmentError("Transient failure before outcome") from exc
+            raise  # Other errors are ambiguous or deterministic
+            
         if not final_text:
             raise RuntimeError("ADK returned no final authority assessment")
         return AuthorityAssessment.model_validate_json(final_text)

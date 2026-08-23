@@ -1,3 +1,5 @@
+import hashlib
+import json
 from enum import Enum
 from typing import Any
 
@@ -22,6 +24,19 @@ class ChangeEvent(BaseModel):
     @property
     def requires_human_approval(self) -> bool:
         return self.authority_context.get("requires_human_approval") is True
+
+    @property
+    def fingerprint(self) -> str:
+        data = self.model_dump(exclude={"event_id"})
+        canonical = json.dumps(data, sort_keys=True, separators=(',', ':'))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+class ClaimResult(str, Enum):
+    CLAIM_ACQUIRED = "CLAIM_ACQUIRED"
+    IN_PROGRESS = "IN_PROGRESS"
+    TERMINAL_REPLAY = "TERMINAL_REPLAY"
+    EVENT_ID_CONFLICT = "EVENT_ID_CONFLICT"
+    STALE_CLAIM_RECOVERED = "STALE_CLAIM_RECOVERED"
 
 
 class Classification(str, Enum):
@@ -56,10 +71,12 @@ class AuthorityAssessment(BaseModel):
 class WorkflowStatus(str, Enum):
     RECEIVED = "RECEIVED"
     PROCESSING = "PROCESSING"
+    ASSESSING = "ASSESSING"
     WAITING_FOR_HUMAN_AUTHORITY = "WAITING_FOR_HUMAN_AUTHORITY"
     AUTONOMOUSLY_CONTINUABLE = "AUTONOMOUSLY_CONTINUABLE"
     BLOCKED = "BLOCKED"
     FAILED = "FAILED"
+    ASSESSMENT_OUTCOME_UNKNOWN = "ASSESSMENT_OUTCOME_UNKNOWN"
 
 
 TERMINAL_STATUSES = {
@@ -67,4 +84,5 @@ TERMINAL_STATUSES = {
     WorkflowStatus.AUTONOMOUSLY_CONTINUABLE,
     WorkflowStatus.BLOCKED,
     WorkflowStatus.FAILED,
+    WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN,
 }

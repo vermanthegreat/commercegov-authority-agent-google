@@ -25,7 +25,9 @@ def terminal_status(event: ChangeEvent, assessment: AuthorityAssessment) -> Work
     return WorkflowStatus.AUTONOMOUSLY_CONTINUABLE
 
 
-async def process_event(event: ChangeEvent, store: RunStore, assessor: AuthorityAssessor) -> dict[str, Any]:
+from app.services.commercegov_client import CommerceGovClient, CommerceGovTransientError, CommerceGovDeterministicError
+
+async def process_event(event: ChangeEvent, store: RunStore, assessor: AuthorityAssessor, cg_client: CommerceGovClient) -> dict[str, Any]:
     owner_id = str(uuid.uuid4())
     claim, run = store.claim_event(event, owner_id)
 
@@ -99,19 +101,75 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
             pass
         raise RuntimeError("Deterministic authority enforcement failed") from exc
 
-    settled = store.settle(
-        event.event_id,
-        owner_id,
-        attempt,
-        status=status.value,
-        classification=classification.value,
-        risk_level=assessment.risk_level.value,
-        recommended_next_action=action.value,
-        reason=assessment.reason,
-        policy_observations=assessment.policy_observations,
-    )
-    # Deliberately outside workflow-failure settlement handlers. A response-path
-    # failure cannot downgrade committed authority.
+    proposal_id = None
+    if status == WorkflowStatus.AUTONOMOUSLY_CONTINUABLE and action == RecommendedNextAction.CONTINUE:
+        # Taskmaster does NOT have apply or approve authority.
+        # It submits a governed proposal and stops.
+        try:
+            # We encode the attempt into the idempotency key so that retries won't conflict 
+            # if we accidentally repeat a process_event execution due to worker crash before settlement.
+            # However, if we do crash before settlement, the event will remain ASSESSING and require human intervention
+            # per current architecture.
+            idem = f"tm-{event.event_id}-{attempt}"
+            changes = {event.mutation_class.split(".")[-1]: event.proposed_value}
+            
+            proposal_id = await cg_client.submit_proposal(
+                shop_id=event.shop_id,
+                product_id=event.target_id,
+                changes=changes,
+                idempotency_key=idem
+            )
+        except CommerceGovTransientError as exc:
+            # We already generated the assessment, and now we failed to submit the proposal due to transient error.
+            # Because we haven't stored the assessment in a durable "waiting to submit" queue, we cannot 
+            # safely retry the submission without re-running Gemini. We fail closed.
+            try:
+                store.mark_assessment_unknown(
+                    event.event_id,
+                    owner_id,
+                    attempt,
+                    reason=f"Failed to submit governed proposal due to transient error: {exc}"
+                )
+            except Exception:
+                pass
+            raise RuntimeError("Failed to submit governed proposal due to transient error") from exc
+        except CommerceGovDeterministicError as exc:
+            try:
+                store.settle(
+                    event.event_id,
+                    owner_id,
+                    attempt,
+                    status=WorkflowStatus.FAILED.value,
+                    reason=f"CommerceGov rejected proposal: {exc}"
+                )
+            except Exception:
+                pass
+            raise RuntimeError("CommerceGov rejected proposal") from exc
+        except Exception as exc:
+            try:
+                store.mark_assessment_unknown(
+                    event.event_id,
+                    owner_id,
+                    attempt,
+                    reason=f"Failed to submit governed proposal due to unknown error: {exc}"
+                )
+            except Exception:
+                pass
+            raise RuntimeError("Failed to submit governed proposal due to unknown error") from exc
+
+    # If we got a proposal_id, include it in the settled fields.
+    settle_kwargs = {
+        "status": status.value,
+        "classification": classification.value,
+        "risk_level": assessment.risk_level.value,
+        "recommended_next_action": action.value,
+        "reason": assessment.reason,
+        "policy_observations": assessment.policy_observations,
+    }
+    if proposal_id:
+        settle_kwargs["proposal_id"] = proposal_id
+
+    settled = store.settle(event.event_id, owner_id, attempt, **settle_kwargs)
     return store.get(event.event_id) or settled
 
 
@@ -123,6 +181,6 @@ async def post_change(request: Request) -> dict[str, Any]:
     except (ValueError, EventParseError):
         raise HTTPException(status_code=400, detail="Invalid governed change event")
     try:
-        return await process_event(event, request.app.state.run_store, request.app.state.assessor)
+        return await process_event(event, request.app.state.run_store, request.app.state.assessor, request.app.state.commercegov_client)
     except RuntimeError:
         raise HTTPException(status_code=502, detail="Authority assessment failed")

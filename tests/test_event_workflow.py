@@ -6,7 +6,7 @@ from app.models import Classification, RecommendedNextAction, WorkflowStatus
 
 
 def test_human_boundary_persists_waiting_state(app_with_fake, event_payload):
-    app, _, assessor = app_with_fake
+    app, _, assessor, cg_client = app_with_fake
     response = TestClient(app).post("/events/change", json=event_payload)
     assert response.status_code == 200
     assert response.json()["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
@@ -14,7 +14,7 @@ def test_human_boundary_persists_waiting_state(app_with_fake, event_payload):
 
 
 def test_human_requirement_cannot_be_bypassed_by_model(app_with_fake, event_payload):
-    app, _, assessor = app_with_fake
+    app, _, assessor, cg_client = app_with_fake
     assessor.result = assessor.result.model_copy(update={
         "classification": Classification.AUTONOMOUSLY_CONTINUE,
         "recommended_next_action": RecommendedNextAction.CONTINUE,
@@ -26,7 +26,7 @@ def test_human_requirement_cannot_be_bypassed_by_model(app_with_fake, event_payl
 
 
 def test_terminal_replay_does_not_invoke_model_again(app_with_fake, event_payload, caplog):
-    app, _, assessor = app_with_fake
+    app, _, assessor, cg_client = app_with_fake
     client = TestClient(app)
     caplog.set_level(logging.INFO, logger="uvicorn.error")
     first = client.post("/events/change", json=event_payload)

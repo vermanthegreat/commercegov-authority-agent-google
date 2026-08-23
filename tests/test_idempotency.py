@@ -84,7 +84,7 @@ def test_threaded_concurrent_stale_recovery_has_one_owner(base_payload):
 
 @run_async_test
 async def test_concurrent_delivery_calls_assessor_once(app_with_fake, base_payload):
-    app, _, assessor = app_with_fake
+    app, _, assessor, cg_client = app_with_fake
     original_assess = assessor.assess
 
     async def slow_assess(event):
@@ -103,7 +103,7 @@ async def test_concurrent_delivery_calls_assessor_once(app_with_fake, base_paylo
 
 
 def test_in_progress_duplicate_does_not_assess(app_with_fake, base_payload):
-    app, store, assessor = app_with_fake
+    app, store, assessor, cg_client = app_with_fake
     event = ChangeEvent(**base_payload)
     assert store.claim_event(event, "owner-1")[0] == ClaimResult.CLAIM_ACQUIRED
 
@@ -133,11 +133,13 @@ async def test_long_assessment_beyond_processing_lease_remains_single_flight(bas
             return human_assessment.model_copy(update={"change_id": assessed_event.change_id})
 
     assessor = BlockingAssessor()
-    first = asyncio.create_task(process_event(event, store, assessor))
+    from tests.conftest import FakeCommerceGovClient
+    cg_client = FakeCommerceGovClient()
+    first = asyncio.create_task(process_event(event, store, assessor, cg_client))
     await assessor.started.wait()
     clock.set(10_000)
 
-    duplicate = await process_event(event, store, assessor)
+    duplicate = await process_event(event, store, assessor, cg_client)
     assert duplicate["status"] == WorkflowStatus.ASSESSING.value
     assert assessor.calls == 1
 
@@ -229,8 +231,9 @@ async def test_successful_commit_ack_failure_cannot_downgrade(base_payload, huma
             return human_assessment.model_copy(update={"change_id": event.change_id})
 
     store = AckFailingStore()
+    from tests.conftest import FakeCommerceGovClient
     with pytest.raises(TimeoutError):
-        await process_event(ChangeEvent(**base_payload), store, Assessor())
+        await process_event(ChangeEvent(**base_payload), store, Assessor(), FakeCommerceGovClient())
 
     persisted = store.get(base_payload["event_id"])
     assert persisted["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
@@ -251,8 +254,9 @@ async def test_post_settlement_read_failure_cannot_downgrade(base_payload, human
             return human_assessment.model_copy(update={"change_id": event.change_id})
 
     store = ReadFailingStore()
+    from tests.conftest import FakeCommerceGovClient
     with pytest.raises(OSError):
-        await process_event(ChangeEvent(**base_payload), store, Assessor())
+        await process_event(ChangeEvent(**base_payload), store, Assessor(), FakeCommerceGovClient())
 
     persisted = InMemoryRunStore.get(store, base_payload["event_id"])
     assert persisted["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
@@ -271,17 +275,18 @@ async def test_ambiguous_assessor_failure_fails_closed_without_retry(base_payloa
     store = InMemoryRunStore()
     assessor = FailingAssessor()
     event = ChangeEvent(**base_payload)
+    from tests.conftest import FakeCommerceGovClient
     with pytest.raises(RuntimeError, match="outcome is unknown"):
-        await process_event(event, store, assessor)
+        await process_event(event, store, assessor, FakeCommerceGovClient())
 
     assert store.get(event.event_id)["status"] == WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN.value
-    replay = await process_event(event, store, assessor)
+    replay = await process_event(event, store, assessor, FakeCommerceGovClient())
     assert replay["status"] == WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN.value
     assert assessor.calls == 1
 
 
 def test_terminal_replay_and_event_conflict_preserve_record(app_with_fake, base_payload):
-    app, store, assessor = app_with_fake
+    app, store, assessor, cg_client = app_with_fake
     client = TestClient(app)
     first = client.post("/events/change", json=base_payload)
     original = store.get(base_payload["event_id"])

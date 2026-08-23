@@ -39,8 +39,22 @@ def human_assessment():
     )
 
 
+class FakeCommerceGovClient:
+    def __init__(self):
+        self.calls = 0
+        self.last_proposal_id = None
+        self.error = None
+
+    async def submit_proposal(self, shop_id, product_id, changes, idempotency_key):
+        self.calls += 1
+        if self.error:
+            raise self.error
+        self.last_proposal_id = f"prop-{idempotency_key}"
+        return self.last_proposal_id
+
 @pytest.fixture
 def app_with_fake(human_assessment):
     store = InMemoryRunStore()
     assessor = FakeAssessor(human_assessment)
-    return create_app(store=store, assessor=assessor), store, assessor
+    cg_client = FakeCommerceGovClient()
+    return create_app(store=store, assessor=assessor, commercegov_client=cg_client), store, assessor, cg_client

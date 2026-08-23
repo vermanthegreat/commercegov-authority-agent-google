@@ -9,6 +9,8 @@ class Settings:
     gemini_model: str
     firestore_database: str
     use_in_memory_store: bool
+    commercegov_api_url: str | None
+    commercegov_api_token: str | None
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -18,4 +20,6 @@ class Settings:
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
             firestore_database=os.getenv("FIRESTORE_DATABASE", "(default)"),
             use_in_memory_store=os.getenv("USE_IN_MEMORY_STORE", "false").lower() == "true",
+            commercegov_api_url=os.getenv("COMMERCEGOV_API_URL"),
+            commercegov_api_token=os.getenv("COMMERCEGOV_API_TOKEN"),
         )

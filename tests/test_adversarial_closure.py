@@ -51,8 +51,10 @@ async def test_transient_failure_recovery(event):
     store = InMemoryRunStore()
     assessor = FakeAssessor(error=TransientPreAssessmentError("transport error"))
     
+    from tests.conftest import FakeCommerceGovClient
+    cg_client = FakeCommerceGovClient()
     with pytest.raises(HTTPException) as exc:
-        await process_event(event, store, assessor)
+        await process_event(event, store, assessor, cg_client)
     assert exc.value.status_code == 503
     
     # State should be reverted to PROCESSING and claim clock reset
@@ -69,8 +71,10 @@ async def test_ambiguous_failure_is_terminal(event):
     store = InMemoryRunStore()
     assessor = FakeAssessor(error=RuntimeError("unknown adk error"))
     
+    from tests.conftest import FakeCommerceGovClient
+    cg_client = FakeCommerceGovClient()
     with pytest.raises(RuntimeError, match="unknown"):
-        await process_event(event, store, assessor)
+        await process_event(event, store, assessor, cg_client)
         
     run = store.get(event.event_id)
     assert run["status"] == WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN.value
@@ -85,8 +89,10 @@ async def test_deterministic_failure_is_terminal(event):
     
     assessor = FakeAssessor(error=pydantic.ValidationError.from_exception_data("title", line_errors=[]))
     
+    from tests.conftest import FakeCommerceGovClient
+    cg_client = FakeCommerceGovClient()
     with pytest.raises(RuntimeError, match="Deterministic"):
-        await process_event(event, store, assessor)
+        await process_event(event, store, assessor, cg_client)
         
     run = store.get(event.event_id)
     assert run["status"] == WorkflowStatus.FAILED.value

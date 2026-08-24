@@ -11,6 +11,7 @@ class Settings:
     use_in_memory_store: bool
     commercegov_api_url: str | None
     commercegov_api_token: str | None
+    taskmaster_api_token: str | None
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -22,4 +23,5 @@ class Settings:
             use_in_memory_store=os.getenv("USE_IN_MEMORY_STORE", "false").lower() == "true",
             commercegov_api_url=os.getenv("COMMERCEGOV_API_URL"),
             commercegov_api_token=os.getenv("COMMERCEGOV_API_TOKEN"),
+            taskmaster_api_token=os.getenv("TASKMASTER_API_TOKEN"),
         )

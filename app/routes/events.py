@@ -2,7 +2,8 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from app.agent.authority_agent import AuthorityAssessor
 from app.models import AuthorityAssessment, ChangeEvent, Classification, ClaimResult, RecommendedNextAction, WorkflowStatus
@@ -11,6 +12,17 @@ from app.services.firestore_store import RunStore
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
+
+bearer_scheme = HTTPBearer(auto_error=False)
+
+def get_taskmaster_token(request: Request, creds: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+    settings = request.app.state.settings
+    if not settings.taskmaster_api_token:
+        raise HTTPException(status_code=401, detail="Authentication not configured")
+    if not creds or creds.credentials != settings.taskmaster_api_token:
+        raise HTTPException(status_code=401, detail="Invalid authentication")
+    return creds.credentials
+
 
 
 def terminal_status(event: ChangeEvent, assessment: AuthorityAssessment) -> WorkflowStatus:
@@ -189,6 +201,18 @@ def _run_read_projection(run: dict[str, Any]) -> dict[str, Any]:
     # Legacy records remain explicitly unbound. Never infer or manufacture tenancy.
     return run | {"shop_id": run.get("shop_id")}
 
+
+@router.post("/runs")
+async def create_run(
+    event: ChangeEvent, 
+    request: Request, 
+    token: str = Depends(get_taskmaster_token)
+) -> dict[str, Any]:
+    try:
+        run = await process_event(event, request.app.state.run_store, request.app.state.assessor, request.app.state.commercegov_client)
+        return _run_read_projection(run)
+    except RuntimeError:
+        raise HTTPException(status_code=502, detail="Authority assessment failed")
 
 @router.get("/runs")
 async def list_runs(

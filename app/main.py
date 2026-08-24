@@ -20,6 +20,7 @@ def create_app(*, store=None, assessor=None, settings: Settings | None = None, c
         else:
             store = FirestoreRunStore(settings.google_cloud_project, settings.firestore_database)
     app.state.run_store = store
+    app.state.settings = settings
     app.state.assessor = assessor or AdkGeminiAuthorityAssessor(settings)
     app.state.commercegov_client = commercegov_client or CommerceGovClient(
         base_url=settings.commercegov_api_url,

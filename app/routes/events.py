@@ -2,7 +2,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.agent.authority_agent import AuthorityAssessor
 from app.models import AuthorityAssessment, ChangeEvent, Classification, ClaimResult, RecommendedNextAction, WorkflowStatus
@@ -185,11 +185,22 @@ async def post_change(request: Request) -> dict[str, Any]:
     except RuntimeError:
         raise HTTPException(status_code=502, detail="Authority assessment failed")
 
+def _run_read_projection(run: dict[str, Any]) -> dict[str, Any]:
+    # Legacy records remain explicitly unbound. Never infer or manufacture tenancy.
+    return run | {"shop_id": run.get("shop_id")}
+
+
 @router.get("/runs")
-async def list_runs(request: Request, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+async def list_runs(
+    request: Request,
+    shop_id: str = Query(min_length=1),
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
     # Simple operational projection endpoint for CommerceGov Agent Runs M1
     store: RunStore = request.app.state.run_store
-    return store.list_events(limit=limit, offset=offset)
+    runs = store.list_events(shop_id=shop_id, limit=limit, offset=offset)
+    return [_run_read_projection(run) for run in runs]
 
 @router.get("/runs/stats")
 async def get_stats(request: Request) -> dict[str, int]:
@@ -203,4 +214,4 @@ async def get_run(request: Request, event_id: str) -> dict[str, Any]:
     run = store.get(event_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    return run
+    return _run_read_projection(run)

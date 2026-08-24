@@ -31,9 +31,33 @@ class FakeDocument:
         return FakeSnapshot(self.client.documents.get(self.event_id), self.client.server_time)
 
 
-class FakeCollection:
-    def __init__(self, client):
+class FakeQuery:
+    def __init__(self, client, documents=None):
         self.client = client
+        source = documents if documents is not None else client.documents
+        self.documents = list(source.values())
+
+    def where(self, field=None, operator=None, value=None, *, filter=None):
+        if filter is not None:
+            field = filter.field_path
+            operator = filter.op_string
+            value = filter.value
+        assert operator == "=="
+        matches = {
+            str(index): item
+            for index, item in enumerate(self.documents)
+            if item.get(field) == value
+        }
+        return FakeQuery(self.client, matches)
+
+
+    def stream(self):
+        return [FakeSnapshot(item, self.client.server_time) for item in self.documents]
+
+
+class FakeCollection(FakeQuery):
+    def __init__(self, client):
+        super().__init__(client)
 
     def document(self, event_id):
         return FakeDocument(self.client, event_id)
@@ -193,3 +217,53 @@ def test_local_clock_skew_cannot_create_dual_ownership(firestore_store, event, m
     
     # Worker B must not acquire the claim
     assert result_b == ClaimResult.IN_PROGRESS
+
+
+def test_firestore_shop_binding_filtering_and_legacy_fail_closed(firestore_store, event):
+    store, client = firestore_store
+    result, shop_a_run = store.claim_event(event, "owner-a")
+    assert result == ClaimResult.CLAIM_ACQUIRED
+    assert shop_a_run["shop_id"] == "shop"
+
+    same_result, same_run = store.claim_event(event, "owner-replay")
+    assert same_result == ClaimResult.IN_PROGRESS
+    assert same_run["shop_id"] == "shop"
+
+    cross_shop = event.model_copy(update={"shop_id": "other-shop"})
+    conflict, preserved = store.claim_event(cross_shop, "owner-b")
+    assert conflict == ClaimResult.EVENT_ID_CONFLICT
+    assert preserved["shop_id"] == "shop"
+
+    shop_b_event = event.model_copy(update={"event_id": "evt-firestore-b", "shop_id": "other-shop"})
+    assert store.claim_event(shop_b_event, "owner-b")[0] == ClaimResult.CLAIM_ACQUIRED
+    client.documents["evt-firestore-legacy"] = {
+        "event_id": "evt-firestore-legacy",
+        "fingerprint": event.model_copy(update={"event_id": "evt-firestore-legacy"}).fingerprint,
+        "status": WorkflowStatus.PROCESSING.value,
+        "created_at": client.server_time,
+    }
+
+    assert [run["event_id"] for run in store.list_events("shop")] == [event.event_id]
+    assert [run["event_id"] for run in store.list_events("other-shop")] == [shop_b_event.event_id]
+
+    legacy_event = event.model_copy(update={"event_id": "evt-firestore-legacy"})
+    legacy_result, legacy = store.claim_event(legacy_event, "owner-legacy")
+    assert legacy_result == ClaimResult.EVENT_ID_CONFLICT
+    assert "shop_id" not in legacy
+
+
+def test_firestore_shop_id_cannot_change_during_settlement(firestore_store, event):
+    store, _ = firestore_store
+    _, run = store.claim_event(event, "owner-a")
+    store.begin_assessment(event.event_id, "owner-a", run["attempt"])
+
+    with pytest.raises(ValueError, match="shop_id is immutable"):
+        store.settle(
+            event.event_id,
+            "owner-a",
+            run["attempt"],
+            status=WorkflowStatus.FAILED.value,
+            shop_id="other-shop",
+        )
+
+    assert store.get(event.event_id)["shop_id"] == "shop"

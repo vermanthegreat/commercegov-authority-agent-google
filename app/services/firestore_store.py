@@ -14,7 +14,7 @@ class RunStore(Protocol):
     def mark_assessment_unknown(self, event_id: str, owner_id: str, attempt: int, reason: str) -> dict[str, Any]: ...
     def settle(self, event_id: str, owner_id: str, attempt: int, **fields: Any) -> dict[str, Any]: ...
     def release_claim(self, event_id: str, owner_id: str, attempt: int) -> dict[str, Any]: ...
-    def list_events(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
+    def list_events(self, shop_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
     def get_stats(self) -> dict[str, int]: ...
 
 
@@ -60,6 +60,9 @@ class InMemoryRunStore:
                 return ClaimResult.CLAIM_ACQUIRED, deepcopy(result)
 
             existing = self.runs[event.event_id]
+            if existing.get("shop_id") != event.shop_id:
+                # Missing legacy bindings and cross-shop replays both fail closed.
+                return ClaimResult.EVENT_ID_CONFLICT, deepcopy(existing)
             if existing.get("fingerprint") != event.fingerprint:
                 return ClaimResult.EVENT_ID_CONFLICT, deepcopy(existing)
             if is_terminal(existing):
@@ -121,6 +124,7 @@ class InMemoryRunStore:
                 raise KeyError(event_id)
             existing = self.runs[event_id]
             _require_owner(existing, owner_id, attempt)
+            _require_shop_id_immutable(existing, fields)
             if is_terminal(existing):
                 return deepcopy(existing)
             if existing.get("status") != WorkflowStatus.ASSESSING.value:
@@ -128,10 +132,11 @@ class InMemoryRunStore:
             existing.update(deepcopy(fields) | {"updated_at": _now()})
             return deepcopy(existing)
 
-    def list_events(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list_events(self, shop_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         with self._lock:
-            # Sort by created_at descending (newest first)
-            sorted_runs = sorted(self.runs.values(), key=lambda r: r.get("created_at", ""), reverse=True)
+            # Filter before pagination. Missing legacy bindings never match.
+            matching_runs = (run for run in self.runs.values() if run.get("shop_id") == shop_id)
+            sorted_runs = sorted(matching_runs, key=lambda r: r.get("created_at", ""), reverse=True)
             return [deepcopy(r) for r in sorted_runs[offset:offset+limit]]
 
     def get_stats(self) -> dict[str, int]:
@@ -201,6 +206,9 @@ class FirestoreRunStore:
                 return ClaimResult.CLAIM_ACQUIRED, result
 
             existing = snapshot.to_dict()
+            if existing.get("shop_id") != event.shop_id:
+                # Missing legacy bindings and cross-shop replays both fail closed.
+                return ClaimResult.EVENT_ID_CONFLICT, existing
             if existing.get("fingerprint") != event.fingerprint:
                 return ClaimResult.EVENT_ID_CONFLICT, existing
             if is_terminal(existing):
@@ -299,6 +307,7 @@ class FirestoreRunStore:
                 raise KeyError(event_id)
             existing = snapshot.to_dict()
             _require_owner(existing, owner_id, attempt)
+            _require_shop_id_immutable(existing, fields)
             if is_terminal(existing):
                 return existing
             if existing.get("status") != WorkflowStatus.ASSESSING.value:
@@ -310,10 +319,17 @@ class FirestoreRunStore:
 
         return _transactional_settle(self._client.transaction())
 
-    def list_events(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-        from google.cloud import firestore
-        query = self._client.collection(self._collection).order_by("created_at", direction=firestore.Query.DESCENDING).offset(offset).limit(limit)
-        return [doc.to_dict() for doc in query.stream()]
+    def list_events(self, shop_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        # Firestore performs the tenant filter. Sorting and pagination operate only
+        # on the already tenant-scoped result set and need no composite index.
+        query = self._client.collection(self.COLLECTION).where(
+            filter=FieldFilter("shop_id", "==", shop_id)
+        )
+        matching_runs = (doc.to_dict() for doc in query.stream())
+        sorted_runs = sorted(matching_runs, key=lambda run: str(run.get("created_at", "")), reverse=True)
+        return sorted_runs[offset:offset+limit]
 
     def get_stats(self) -> dict[str, int]:
         # Using aggregation queries for stats where possible
@@ -342,6 +358,11 @@ def _require_owner(run: dict[str, Any], owner_id: str, attempt: int) -> None:
 def _require_terminal_status(fields: dict[str, Any]) -> None:
     if fields.get("status") not in {status.value for status in TERMINAL_STATUSES}:
         raise ValueError("Settlement requires a terminal status")
+
+
+def _require_shop_id_immutable(run: dict[str, Any], fields: dict[str, Any]) -> None:
+    if "shop_id" in fields and fields["shop_id"] != run.get("shop_id"):
+        raise ValueError("shop_id is immutable")
 
 
 def is_terminal(run: dict[str, Any]) -> bool:

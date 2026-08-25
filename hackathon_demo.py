@@ -112,7 +112,10 @@ async def run_hackathon_demo(live: bool):
             google_cloud_location="us-central1",
             gemini_model="gemini-3.1-pro-preview",
             firestore_database="(default)",
-            use_in_memory_store=True
+            use_in_memory_store=True,
+            commercegov_api_url="https://mock.commercegov.local",
+            commercegov_api_token="mock_token",
+            taskmaster_api_token="mock_token"
         )
         assessor = AdkGeminiAuthorityAssessor(settings)
     else:

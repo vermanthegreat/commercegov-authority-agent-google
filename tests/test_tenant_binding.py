@@ -131,10 +131,10 @@ class RecordingCommerceGovClient:
         self.calls = 0
         self.shop_ids = []
 
-    async def submit_proposal(self, shop_id, product_id, changes, idempotency_key):
+    async def submit_proposal(self, proposal):
         self.calls += 1
-        self.shop_ids.append(shop_id)
-        return f"proposal-{idempotency_key}"
+        self.shop_ids.append(proposal.shop_id)
+        return f"proposal-{proposal.idempotency_key}"
 
 
 def test_proposal_and_terminal_replay_preserve_single_shop_binding():

@@ -57,6 +57,20 @@ class RecommendedNextAction(str, Enum):
     BLOCK = "BLOCK"
 
 
+class CommerceGovProposalV1(BaseModel):
+    schema_version: str = "v1"
+    source: str = "taskmaster_authority_agent"
+    event_id: str
+    event_fingerprint: str
+    attempt: int
+    shop_id: str
+    target_type: str
+    target_id: str
+    requested_changes: dict[str, Any]
+    authority_classification: str
+    idempotency_key: str
+
+
 class AuthorityAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

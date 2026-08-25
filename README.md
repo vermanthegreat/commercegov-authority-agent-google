@@ -8,9 +8,15 @@ skeleton for assessing that boundary and saving the result.
 
 ## Architecture
 
-`event -> validate/normalize -> one ADK + Gemini assessment -> Python schema and authority enforcement -> Firestore checkpoint -> terminal state`
+`event -> validate/normalize -> deterministic fingerprint -> single-flight/lease -> ADK + Gemini structured assessment -> deterministic Python authority enforcement -> evidence-bound checkpoint -> versioned CommerceGov proposal handoff -> terminal/replay-safe state`
 
-See [the architecture document](docs/architecture.md) for the trust boundary.
+**Important Note on Authority Boundaries:**
+- Taskmaster has no Shopify access.
+- Taskmaster makes no direct production mutations.
+- CommerceGov review, approval, apply, and verification steps remain entirely external and decoupled.
+- Automated tests use a fake assessor and in-memory store.
+- Live Gemini mode is optional (via `python hackathon_demo.py --live`).
+- Exactly one Gemini assessment is executed per unique event.
 
 ## What is new for the hackathon
 

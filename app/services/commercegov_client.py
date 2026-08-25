@@ -2,6 +2,8 @@ import httpx
 from typing import Any
 import logging
 
+from app.models import CommerceGovProposalV1
+
 logger = logging.getLogger("uvicorn.error")
 
 class CommerceGovClientError(Exception):
@@ -18,7 +20,7 @@ class CommerceGovClient:
         self.base_url = (base_url or "").rstrip("/")
         self.api_token = api_token
 
-    async def submit_proposal(self, shop_id: str, product_id: str, changes: dict[str, Any], idempotency_key: str) -> str:
+    async def submit_proposal(self, proposal: CommerceGovProposalV1) -> str:
         """
         Submits a governed proposal and returns the resulting proposal_id.
         """
@@ -26,19 +28,17 @@ class CommerceGovClient:
             logger.warning("CommerceGov API not configured, skipping proposal submission")
             return "skipped-not-configured"
 
-        url = f"{self.base_url}/shops/{shop_id}/products/{product_id}/proposals"
+        # Support both bare IDs and Shopify GIDs for the URL path
+        target_id_part = proposal.target_id.split("/")[-1]
+        url = f"{self.base_url}/shops/{proposal.shop_id}/{proposal.target_type}s/{target_id_part}/proposals"
         headers = {
             "Authorization": f"Bearer {self.api_token}",
             "Content-Type": "application/json"
         }
-        payload = {
-            "changes": changes,
-            "idempotency_key": idempotency_key
-        }
-
+        
         async with httpx.AsyncClient() as client:
             try:
-                resp = await client.post(url, headers=headers, json=payload, timeout=10.0)
+                resp = await client.post(url, headers=headers, json=proposal.model_dump(mode="json"), timeout=10.0)
             except httpx.RequestError as e:
                 raise CommerceGovTransientError(f"Transport error: {e}") from e
 

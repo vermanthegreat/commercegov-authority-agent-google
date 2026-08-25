@@ -45,11 +45,11 @@ class FakeCommerceGovClient:
         self.last_proposal_id = None
         self.error = None
 
-    async def submit_proposal(self, shop_id, product_id, changes, idempotency_key):
+    async def submit_proposal(self, proposal):
         self.calls += 1
         if self.error:
             raise self.error
-        self.last_proposal_id = f"prop-{idempotency_key}"
+        self.last_proposal_id = f"prop-{proposal.idempotency_key}"
         return self.last_proposal_id
 
 @pytest.fixture

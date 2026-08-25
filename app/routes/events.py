@@ -118,19 +118,27 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
         # Taskmaster does NOT have apply or approve authority.
         # It submits a governed proposal and stops.
         try:
-            # We encode the attempt into the idempotency key so that retries won't conflict 
+            # We encode the attempt into the idempotency key so that retries won't conflict
             # if we accidentally repeat a process_event execution due to worker crash before settlement.
             # However, if we do crash before settlement, the event will remain ASSESSING and require human intervention
             # per current architecture.
             idem = f"tm-{event.event_id}-{attempt}"
             changes = {event.mutation_class.split(".")[-1]: event.proposed_value}
-            
-            proposal_id = await cg_client.submit_proposal(
+
+            from app.models import CommerceGovProposalV1
+            proposal_dto = CommerceGovProposalV1(
+                event_id=event.event_id,
+                event_fingerprint=event.fingerprint,
+                attempt=attempt,
                 shop_id=event.shop_id,
-                product_id=event.target_id,
-                changes=changes,
+                target_type=event.target_type,
+                target_id=event.target_id,
+                requested_changes=changes,
+                authority_classification=classification.value,
                 idempotency_key=idem
             )
+
+            proposal_id = await cg_client.submit_proposal(proposal_dto)
         except CommerceGovTransientError as exc:
             # We already generated the assessment, and now we failed to submit the proposal due to transient error.
             # Because we haven't stored the assessment in a durable "waiting to submit" queue, we cannot 

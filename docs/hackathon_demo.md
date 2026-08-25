@@ -1,45 +1,37 @@
-# Taskmaster Hackathon Demo Guide
+# Taskmaster Hackathon Demo Script & Talk Track
 
-## Problem Statement
-Delegating AI authority over a merchant's production systems is risky. An autonomous agent needs a safe sandbox to assess a proposed change based on context and policy, without ever obtaining the credentials or ability to write directly to production.
+## 30-Second Opening
+"Delegating AI authority over a merchant's production systems is risky. Today, we're demonstrating 'Taskmaster' - an intelligent intelligence layer that acts as a safe sandbox. It assesses proposed changes based on complex context and policy using Gemini, without ever holding the credentials or ability to write directly to production. Taskmaster proposes; CommerceGov (our downstream production system) governs and executes."
 
-## Architecture & Trust Boundary
-1. **CommerceGov (Downstream)** is the production authority layer. It connects to Shopify and applies changes securely.
-2. **Taskmaster (This Agent)** is the intelligence layer. It receives a proposed event, securely leases it to prevent duplicate execution, asks an LLM to assess it against policy, and submits a **governed proposal** to CommerceGov. 
-3. Taskmaster has **ZERO Shopify credentials**. Its only output is a versioned proposal DTO handed to CommerceGov. 
-4. The system is designed to gracefully handle adversarial failures, evidence drift, and duplicate events safely. Python deterministic logic completely overrides model outputs for safety constraints.
+## 90-Second Architecture
+"When a commerce event arrives, Taskmaster normalizes it and generates a deterministic fingerprint. It uses Firestore for a single-flight lease to prevent race conditions. We invoke the Google ADK and Vertex AI's Gemini model to perform a structured assessment. 
+Why Gemini? Because determining if a product title aligns with a 'professional tone' is highly subjective. 
+However, Gemini does NOT receive production authority. Our Python deterministic layer enforces the final rules, creates an evidence-bound checkpoint, and yields a versioned `CommerceGovProposalV1` to the downstream control plane."
 
-## How to Run the Demo
-We provide a local CLI runner that simulates 6 adversarial scenarios, proving that Taskmaster's internal state machine strictly bounds the model.
-
+## Demo Sequence
+To run the demo:
 ```bash
-# Run deterministic offline scenarios
+# Run deterministic offline scenarios (proves the state machine)
 python hackathon_demo.py
 
-# Run live with Vertex AI Gemini model (requires ADC set up)
+# Run live with Vertex AI Gemini model
 python hackathon_demo.py --live
 ```
 
-## What the Judge Should Observe
-Observe the `[DECISION BOUNDARY]` and `[COMMERCEGOV HANDOFF]` sections of the output:
-- **Scenario 1 (Safe Continuation):** Model returns `AUTONOMOUSLY_CONTINUE` -> Taskmaster yields a `CommerceGovProposalV1` via Handoff API.
-- **Scenario 2 (Human Authority):** Model detects a subjective decision -> Taskmaster transitions to `WAITING_FOR_HUMAN_AUTHORITY`. No proposal is created.
-- **Scenario 3 (Policy Block):** Model detects a banned keyword -> Taskmaster halts execution as `BLOCKED`.
-- **Scenario 4 (Duplicate Replay):** Identical event received while previous execution exists. Taskmaster returns `AUTONOMOUSLY_CONTINUABLE` from memory without calling the LLM a second time.
-- **Scenario 5 (Evidence Drift):** A new request reuses the old `event_id` but modifies the payload. Taskmaster detects the mismatched fingerprint and securely halts with `409: Event ID conflict`.
-- **Scenario 6 (Ambiguous Outcome):** Simulates a connection timeout after the LLM request is dispatched. Taskmaster securely transitions to `ASSESSMENT_OUTCOME_UNKNOWN` to ensure no unsafe retry occurs.
-
-## Why Gemini?
-Gemini uses its reasoning capabilities to determine whether complex tone guidelines and product definitions are aligned (e.g. classifying a change as subjective or safe).
-
-## Why is Python Authoritative?
-While Gemini recommends an outcome, the Python layer validates the schema, manages state machine transitions, enforces lease ownership, prevents duplication via hashing, and handles failure invariants.
+### The Six Scenarios:
+1. **Safe Continuation:** The model correctly determines the change aligns with policy. Taskmaster returns `AUTONOMOUSLY_CONTINUABLE` and creates a `CommerceGovProposalV1`.
+2. **Human Authority Required:** The model flags the change as subjective or risky. Taskmaster transitions to `WAITING_FOR_HUMAN_AUTHORITY`. No proposal is handed off.
+3. **Policy Block:** The model detects a banned keyword. Taskmaster halts execution as `BLOCKED`.
+4. **Duplicate Replay:** An identical event is received while a previous execution exists. Taskmaster returns `TERMINAL_REPLAY` safely without calling the LLM again.
+5. **Evidence Drift:** A new request reuses the old `event_id` but modifies the payload. Taskmaster detects the mismatched fingerprint and securely halts with `EVENT_ID_CONFLICT`.
+6. **Ambiguous Outcome:** We simulate a connection timeout after the LLM request is dispatched. Taskmaster securely transitions to `ASSESSMENT_OUTCOME_UNKNOWN` to ensure no unsafe autonomous retries occur.
 
 ## Google Technologies Used
 - **Google ADK:** For bounded and schema-constrained LLM agent invocation.
-- **Vertex AI Gemini:** `gemini-3.1-pro-preview` for reasoning.
-- **Firestore:** Used for ACID-compliant distributed locking and single-flight lease management.
+- **Vertex AI Gemini:** `gemini-3.1-pro-preview` for deep reasoning.
+- **Firestore:** Distributed locking and single-flight lease management.
+- **Cloud Run:** Readied for serverless Dockerized deployment.
+- **Pub/Sub:** Compatible adapter for seamless async integration.
 
-## Limitations & Next Steps
-- This hackathon version focuses purely on bounding the agent and idempotency guarantees.
-- The next step is a live integration with the unified CommerceGov platform and a fully persistent Cloud Run deployment with Pub/Sub ingress.
+## Closing
+"Taskmaster can decide how far an autonomous system may proceed based on deep contextual reasoning. But CommerceGov remains the system that governs actual production authority. AI proposes; Python constrains; CommerceGov governs."

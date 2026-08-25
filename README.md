@@ -1,106 +1,45 @@
 # CommerceGov Authority Agent — Google Hackathon
 
-## Problem
+## WHAT IS THIS?
+This project is an intelligent "Taskmaster" agent designed to safely sandbox autonomous decision-making for e-commerce. It acts as an authority assessment layer before any production changes occur.
 
-Governed commerce changes should proceed automatically only until a real
-production-authority decision is needed. This service is the Phase 1 walking
-skeleton for assessing that boundary and saving the result.
+## WHY DOES IT EXIST?
+Delegating AI authority over a merchant's production systems is extremely risky. An autonomous agent needs a safe sandbox to assess a proposed change based on context and policy, without ever obtaining the credentials or ability to write directly to production.
 
-## Architecture
+## WHAT DOES GEMINI DO?
+Gemini (via Google ADK) uses its reasoning capabilities to assess complex, subjective policy guidelines against a proposed event (e.g., determining if a product title change aligns with a "professional brand tone"). It outputs a structured recommendation (e.g., `AUTONOMOUSLY_CONTINUE`, `HUMAN_AUTHORITY_REQUIRED`, `BLOCKED`).
 
-`event -> validate/normalize -> deterministic fingerprint -> single-flight/lease -> ADK + Gemini structured assessment -> deterministic Python authority enforcement -> evidence-bound checkpoint -> versioned CommerceGov proposal handoff -> terminal/replay-safe state`
+## WHAT DOES PYTHON ENFORCE?
+While Gemini recommends an outcome, the deterministic Python layer:
+- Validates the schema.
+- Manages state machine transitions.
+- Enforces single-flight processing leases.
+- Prevents duplication via cryptographic fingerprinting.
+- Handles failure invariants securely (failing closed).
+- Submits the final versioned `CommerceGovProposalV1`.
 
-**Important Note on Authority Boundaries:**
-- Taskmaster has no Shopify access.
-- Taskmaster makes no direct production mutations.
-- CommerceGov review, approval, apply, and verification steps remain entirely external and decoupled.
-- Automated tests use a fake assessor and in-memory store.
-- Live Gemini mode is optional (via `python hackathon_demo.py --live`).
-- Exactly one Gemini assessment is executed per unique event.
+## WHAT DOES COMMERCEGOV DO?
+CommerceGov is the external, pre-existing governance control plane. It holds the production authority. It receives the `CommerceGovProposalV1` from this agent, executes the change in Shopify securely if approved, and handles verification. 
 
-## What is new for the hackathon
+## WHAT GOOGLE TECHNOLOGY IS USED?
+- **Google ADK:** For bounded, schema-constrained LLM agent invocation.
+- **Vertex AI Gemini:** `gemini-3.1-pro-preview` model for reasoning and structured generation.
+- **Firestore:** Used for ACID-compliant distributed locking, single-flight lease management, and checkpointing.
+- **Cloud Run:** Fully containerized and prepared for serverless deployment.
+- **Pub/Sub:** Compatible event ingress via an envelope adapter.
 
-This independent repository adds a Google ADK authority agent, Gemini structured
-assessment, Pub/Sub-compatible event adapter, Firestore checkpoint abstraction,
-idempotency, and Cloud Run packaging.
-
-## What CommerceGov provides externally
-
-CommerceGov remains the pre-existing governance control plane. Its production
-review, approval, command, worker, and verification systems are not included or
-changed here.
-
-## Local setup
-
-Requires Python 3.12.
-
+## HOW DO I RUN THE DEMO?
+Run the deterministically faked, offline test (no network calls, proves the state machine):
 ```bash
-python -m venv .venv
-.venv\\Scripts\\activate  # Windows PowerShell: .venv\\Scripts\\Activate.ps1
-pip install -e ".[dev]"
-copy .env.example .env
+python hackathon_demo.py
 ```
 
-Set `USE_IN_MEMORY_STORE=true` for a local server without Firestore. Tests
-inject their own in-memory store and fake assessor.
-
+Run with live Gemini (requires Application Default Credentials and Vertex API enabled):
 ```bash
-uvicorn app.main:app --reload
+python hackathon_demo.py --live
 ```
 
-`POST /events/change` accepts the documented direct JSON adapter contract or a
-Pub/Sub push envelope whose `message.data` is base64-encoded JSON.
-
-## Testing
-
-```bash
-pytest
-```
-
-Tests make no external network calls and consume zero Gemini tokens.
-
-## Required Google Cloud services
-
-For a deployed runtime: Cloud Run, Firestore (Native mode), Pub/Sub, Vertex AI
-/ Gemini access, and a service account with only the required runtime access.
-Enable services and bind identities deliberately; this repository does not
-provision infrastructure.
-
-## Environment variables
-
-| Variable | Purpose |
-| --- | --- |
-| `GOOGLE_CLOUD_PROJECT` | GCP project for ADC-backed Google clients |
-| `GOOGLE_CLOUD_LOCATION` | Gemini/Agent Platform location (default `us-central1`) |
-| `GOOGLE_GENAI_USE_VERTEXAI` | Set to `True` to select the Vertex AI Gemini backend |
-| `GEMINI_MODEL` | ADK Gemini model (default `gemini-2.5-flash`) |
-| `FIRESTORE_DATABASE` | Firestore database ID (default `(default)`) |
-| `USE_IN_MEMORY_STORE` | Local-only persistence switch |
-
-## Cloud Run deployment outline
-
-Build and deploy only after choosing a project and configuring credentials:
-
-```bash
-gcloud run deploy commercegov-authority-agent \
-  --source . --region YOUR_REGION --project YOUR_PROJECT \
-  --no-allow-unauthenticated --min-instances 0
-```
-
-Use an attached Cloud Run runtime service account with Firestore and Vertex AI
-permissions. Authentication uses Application Default Credentials; no
-service-account JSON key or `GOOGLE_APPLICATION_CREDENTIALS` is required. Set
-`GOOGLE_GENAI_USE_VERTEXAI=True` along with the environment variables above.
-Cloud Run provides `PORT`; the image binds `0.0.0.0:$PORT`. Keep min instances
-at zero, use no GPU, and retain one Gemini invocation per unique event.
-
-## Current implementation status
-
-Phase 1 is implemented: normalized input, one bounded assessment, deterministic
-authority invariant, terminal checkpoints, and terminal replay idempotency.
-
-Limitations:
-
-- No CommerceGov production mutation is performed.
-- No human approval callback exists yet.
-- No Shopify access exists in this repository.
+## WHAT DOES NOT HAPPEN?
+- **Taskmaster DOES NOT write directly to Shopify.** It possesses ZERO Shopify credentials.
+- **Taskmaster DOES NOT grant final production approval.** It only yields a governed proposal.
+- **Taskmaster DOES NOT execute or apply changes.** Applied ≠ Verified. Assessment ≠ Production Approval.

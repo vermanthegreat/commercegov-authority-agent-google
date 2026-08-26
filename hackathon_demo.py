@@ -2,61 +2,51 @@ import argparse
 import asyncio
 import json
 import logging
+import hashlib
 from typing import Any
 
-from app.models import ChangeEvent, WorkflowStatus, AuthorityAssessment, Classification, RiskLevel, RecommendedNextAction
+from app.models import (
+    ChangeEvent, WorkflowStatus, AuthorityIntelligenceAssessmentV1, 
+    IntelligenceClassification, OperatorAction, PipelineNamespace
+)
 from app.services.firestore_store import InMemoryRunStore
-from app.routes.events import process_event
-from app.agent.authority_agent import AuthorityAssessor, AdkGeminiAuthorityAssessor, TransientPreAssessmentError
+from app.routes.operational import process_operational_event
+from app.agent.intelligence_agent import IntelligenceAssessor, AdkGeminiIntelligenceAssessor
 from app.config import Settings
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger("demo")
 logger.setLevel(logging.INFO)
 
-class DeterministicFakeAssessor(AuthorityAssessor):
-    async def assess(self, event: ChangeEvent) -> AuthorityAssessment:
-        logger.info(f"   [Assessor] Assessing event {event.event_id} (Offline Deterministic Mode)")
-        logger.info(f"   [Assessor] Gathering evidence... fingerprint: {event.fingerprint}")
+class DeterministicFakeIntelligenceAssessor(IntelligenceAssessor):
+    async def assess(self, event: dict[str, Any], history: list[dict[str, Any]]) -> AuthorityIntelligenceAssessmentV1:
+        logger.info(f"   [Assessor] Assessing event {event.get('event_id')} (Offline Deterministic Mode)")
+        logger.info(f"   [Assessor] History records provided: {len(history)}")
         
-        val = event.proposed_value.lower()
-        if "ambiguous" in val:
-            # Simulate a failure after assessment dispatch
-            raise RuntimeError("Simulated unknown ADK exception after dispatch")
-        elif "blocked" in val:
-            return AuthorityAssessment(
-                change_id=event.change_id,
-                classification=Classification.BLOCKED,
-                risk_level=RiskLevel.high,
-                reason="Policy violation: Restricted keyword",
-                policy_observations=["Contains blocked word"],
-                recommended_next_action=RecommendedNextAction.BLOCK
-            )
-        elif "review" in val:
-            return AuthorityAssessment(
-                change_id=event.change_id,
-                classification=Classification.HUMAN_AUTHORITY_REQUIRED,
-                risk_level=RiskLevel.medium,
-                reason="Review required for material change",
-                policy_observations=["Tone check required"],
-                recommended_next_action=RecommendedNextAction.REQUEST_HUMAN_AUTHORITY
+        has_related_history = False
+        for h in history:
+            if h.get("mutation_class") == event.get("mutation_class") and h.get("classification") == IntelligenceClassification.AUTHORITY_AT_RISK.value:
+                has_related_history = True
+                break
+
+        if has_related_history:
+            return AuthorityIntelligenceAssessmentV1(
+                classification=IntelligenceClassification.AUTHORITY_AT_RISK,
+                summary="Repeated title change attempt following prior risk",
+                reason="Multiple changes to the same target property detected after a risky event.",
+                evidence_refs=["hist-1"],
+                affected_scope="product.title",
+                recommended_operator_action=OperatorAction.INVESTIGATE_RISK
             )
         else:
-            return AuthorityAssessment(
-                change_id=event.change_id,
-                classification=Classification.AUTONOMOUSLY_CONTINUE,
-                risk_level=RiskLevel.low,
-                reason="Change is acceptable",
-                policy_observations=["Title update acceptable"],
-                recommended_next_action=RecommendedNextAction.CONTINUE
+            return AuthorityIntelligenceAssessmentV1(
+                classification=IntelligenceClassification.NO_ACTION_REQUIRED,
+                summary="Standard change with no relevant risk history",
+                reason="Normal operation, safe to suppress.",
+                evidence_refs=[],
+                affected_scope="product.title",
+                recommended_operator_action=OperatorAction.NONE
             )
-
-class DeterministicFakeCommerceGovClient:
-    async def submit_proposal(self, proposal) -> str:
-        logger.info(f"   [CommerceGov Handoff] Submitting governed proposal for {proposal.shop_id}/{proposal.target_id}")
-        logger.info(f"   [CommerceGov Handoff] Idempotency Key: {proposal.idempotency_key}")
-        logger.info(f"   [CommerceGov Handoff] Changes: {json.dumps(proposal.requested_changes)}")
-        return f"prop-mock-{proposal.event_id}"
 
 def make_event(event_id: str, proposed_value: str) -> ChangeEvent:
     return ChangeEvent(
@@ -72,36 +62,97 @@ def make_event(event_id: str, proposed_value: str) -> ChangeEvent:
         authority_context={"actor_role": "operator"}
     )
 
-async def print_run(name: str, event: ChangeEvent, store: InMemoryRunStore, assessor: AuthorityAssessor, cg_client: DeterministicFakeCommerceGovClient):
-    print(f"\n--- SCENARIO: {name} ---")
-    print(f"EVENT: {event.event_id}")
-    print(f"REQUESTED CHANGE: '{event.current_value}' -> '{event.proposed_value}'")
-    print(f"FINGERPRINT: {event.fingerprint}")
+def inject_history(store: InMemoryRunStore, event: ChangeEvent, related: bool):
+    canonical = json.dumps({"tenant": event.agency_id, "shop": event.shop_id, "target": event.target_id, "type": event.target_type, "concern": event.mutation_class}, sort_keys=True, separators=(",",":"))
+    attention_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     
-    try:
-        result = await process_event(event, store, assessor, cg_client)
-    except Exception as e:
-        print(f"Exception during processing: {e}")
-        result = store.get(event.event_id) or {"status": "UNKNOWN"}
+    if related:
+        hist = {
+            "event_id": f"hist-related-{event.event_id}",
+            "namespace": PipelineNamespace.AUTHORITY_INTELLIGENCE.value,
+            "attention_key": attention_key,
+            "intelligence_classification": IntelligenceClassification.AUTHORITY_AT_RISK.value,
+            "summary": "Previous risky change",
+            "reason": "Operator previously flagged this.",
+            "affected_scope": event.mutation_class,
+            "target_id": event.target_id,
+            "mutation_class": event.mutation_class,
+            "status": WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value,
+            "evidence_refs": ["evidence-1"],
+            "created_at": "2026-08-25T12:00:00Z"
+        }
+    else:
+        hist = {
+            "event_id": f"hist-unrelated-{event.event_id}",
+            "namespace": PipelineNamespace.AUTHORITY_INTELLIGENCE.value,
+            "attention_key": attention_key,
+            "intelligence_classification": IntelligenceClassification.INFORMATIONAL.value,
+            "summary": "Previous informational change",
+            "reason": "Just a normal log.",
+            "affected_scope": event.mutation_class,
+            "target_id": event.target_id,
+            "mutation_class": event.mutation_class,
+            "status": WorkflowStatus.SUPPRESSED.value,
+            "evidence_refs": [],
+            "created_at": "2026-08-25T12:00:00Z"
+        }
+    store.runs[f"{PipelineNamespace.AUTHORITY_INTELLIGENCE.value}:{hist['event_id']}"] = hist
 
-    print("\n[DECISION BOUNDARY]")
-    print(f"Status: {result.get('status')}")
-    print(f"Attempt: {result.get('attempt')}")
-    if "classification" in result:
-        print(f"Authority Classification: {result.get('classification')}")
-        print(f"Reason: {result.get('reason')}")
+
+async def print_run(name: str, event: ChangeEvent, store: InMemoryRunStore, assessor: IntelligenceAssessor):        
+    print(f"\n================================================")
+    print(f"SCENARIO: {name}")
+    print(f"================================================")
+    print(f"Current event:\n  ID: {event.event_id}\n  Change: '{event.current_value}' -> '{event.proposed_value}'")
+
+    # Show history if present
+    canonical = json.dumps({"tenant": event.agency_id, "shop": event.shop_id, "target": event.target_id, "type": event.target_type, "concern": event.mutation_class}, sort_keys=True, separators=(",",":"))
+    attention_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    history = store.get_history(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
     
-    if "proposal_id" in result:
-        print(f"\n[COMMERCEGOV HANDOFF]")
-        print(f"Proposal Version: v1")
-        print(f"Proposal ID: {result.get('proposal_id')}")
+    print("\nHistory:")
+    if not history:
+        print("  None")
+    else:
+        for h in history:
+            print(f"  - [{h.get('created_at')}] {h.get('intelligence_classification')}: {h.get('summary')}")
+
+    try:
+        result = await process_operational_event(event, store, assessor)
+    except Exception as e:
+        print(f"\nException during processing: {e}")
+        result = store.get(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, event.event_id) or {"status": "UNKNOWN"}
+
+    attention = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
+    action = attention.get('recommended_operator_action', 'NONE') if attention else 'NONE'
+
+    print("\nAuthority Intelligence:")
+    print(f"  Level: {result.get('intelligence_classification', 'N/A')}")
+    print(f"  Reason: {result.get('reason', 'N/A')}")
+    print(f"  Recommended action: {action}")
+
+    print("\nCommerceGov Approval:")
+    print("  NOT GRANTED")
     
-    print(f"\n[PRODUCTION EFFECT]")
-    print("SHOPIFY DIRECT WRITE: NONE")
+    print("\nCommerceGov Apply:")
+    print("  NOT GRANTED")
+
+    print("\nShopify Direct Write:")
+    print("  NONE")
+
+    print("\nWhy this changed:")
+    if result.get('intelligence_classification') == IntelligenceClassification.AUTHORITY_AT_RISK.value:
+        print("  The intelligence assessor correlated the current event with an unresolved risky history, elevating the response to block autonomous progression.")
+    else:
+        print("  The intelligence assessor found no related risks, so it suppressed the event as noise (safe continuation).")
 
 async def run_hackathon_demo(live: bool):
     print("==================================================")
     print(f"TASKMASTER HACKATHON DEMO (LIVE GEMINI: {live})")
+    if not live:
+        print("Offline demo mode reproduces the same structured assessment contract")
+        print("without requiring external credentials.")
+        print("The live path uses Gemini over the bounded context.")
     print("==================================================")
 
     store = InMemoryRunStore()
@@ -117,45 +168,42 @@ async def run_hackathon_demo(live: bool):
             commercegov_api_token="mock_token",
             taskmaster_api_token="mock_token"
         )
-        assessor = AdkGeminiAuthorityAssessor(settings)
+        assessor = AdkGeminiIntelligenceAssessor(settings)
     else:
-        assessor = DeterministicFakeAssessor()
-        
-    cg_client = DeterministicFakeCommerceGovClient()
+        assessor = DeterministicFakeIntelligenceAssessor()
 
-    # 1. SAFE CONTINUATION
+    # Scenario 1. SAFE CONTINUATION
     evt1 = make_event("evt-001", "Snowboard Pro Edition")
-    await print_run("1. SAFE CONTINUATION", evt1, store, assessor, cg_client)
+    await print_run("1. SAFE CONTINUATION", evt1, store, assessor)   
 
-    # 2. HUMAN AUTHORITY REQUIRED
-    evt2 = make_event("evt-002", "review this new title")
-    await print_run("2. HUMAN AUTHORITY REQUIRED", evt2, store, assessor, cg_client)
+    # Scenario 2. KILLER DEMO: SAME EVENT + RELATED HISTORY
+    store = InMemoryRunStore()
+    evt2a = make_event("evt-002", "Snowboard Elite")
+    inject_history(store, evt2a, related=False)
+    await print_run("2A. SAME EVENT, DIFFERENT HISTORY (Unrelated/Resolved)", evt2a, store, assessor)
 
-    # 3. POLICY BLOCK
-    evt3 = make_event("evt-003", "blocked title change")
-    await print_run("3. POLICY BLOCK", evt3, store, assessor, cg_client)
+    store = InMemoryRunStore()
+    evt2b = make_event("evt-002", "Snowboard Elite")
+    inject_history(store, evt2b, related=True)
+    await print_run("2B. SAME EVENT, DIFFERENT HISTORY (Related/Unresolved)", evt2b, store, assessor)
 
-    # 4. DUPLICATE REPLAY
-    print(f"\n--- SCENARIO: 4. DUPLICATE REPLAY ---")
-    print("Re-submitting evt-001 with exact same fingerprint...")
-    result4 = await process_event(evt1, store, assessor, cg_client)
-    print(f"Replay Status: {result4.get('status')}")
-
-    # 5. EVIDENCE DRIFT / ID CONFLICT
-    print(f"\n--- SCENARIO: 5. EVIDENCE DRIFT / ID CONFLICT ---")
-    print("Re-submitting evt-001 with DIFFERENT proposed value...")
-    evt5 = make_event("evt-001", "Sneaky change")
+    # Scenario 3. ADVERSARIAL PROTECTION
+    print(f"\n================================================")
+    print("SCENARIO: 3. ADVERSARIAL PROTECTION")
+    print(f"================================================")
+    print("Re-submitting evt-002 with DIFFERENT proposed value (Evidence Drift) ...")
+    evt3 = make_event("evt-002", "Sneaky change")
     try:
-        await process_event(evt5, store, assessor, cg_client)
+        await process_operational_event(evt3, store, assessor)
     except Exception as e:
-        print(f"Rejected securely: {e}")
+        print(f"Deterministic enforcement rejected operation securely:\n{e}")
 
-    # 6. AMBIGUOUS ASSESSOR OUTCOME
-    evt6 = make_event("evt-006", "ambiguous")
-    if live:
-        print("\n--- SCENARIO: 6. AMBIGUOUS OUTCOME (Skipped in live mode to avoid random network drops) ---")
-    else:
-        await print_run("6. AMBIGUOUS ASSESSOR OUTCOME", evt6, store, assessor, cg_client)
+    print("\nCommerceGov Approval:")
+    print("  NOT GRANTED")
+    print("\nCommerceGov Apply:")
+    print("  NOT GRANTED")
+    print("\nShopify Direct Write:")
+    print("  NONE")
 
     print("\n==================================================")
     print("DEMO COMPLETE")

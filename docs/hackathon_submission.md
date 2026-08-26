@@ -1,5 +1,8 @@
 # Taskmaster: CommerceGov Authority Agent
 
+## TRACK
+The Taskmaster
+
 ## ONE-LINE DESCRIPTION
 A safe, bounded AI intelligence sandbox that assesses operational commerce events against their structured history without ever holding production write credentials.
 
@@ -18,7 +21,7 @@ Taskmaster acts as a rigid trust boundary. It ingests proposed commerce events a
 
 ## GOOGLE TECHNOLOGIES USED
 - **Google ADK:** Core framework for the structured LlmAgent.
-- **Vertex AI (Gemini 3.1 Pro Preview):** Reasoning engine for subjective policy decisions and historical correlations.
+- **Vertex AI (Gemini 3.5 Flash):** Reasoning engine for subjective policy decisions and historical correlations.
 - **Firestore:** ACID-compliant, distributed single-flight lease management.
 - **Cloud Run:** Containerized for serverless deployment.
 - **Pub/Sub:** Event ingress adapter.

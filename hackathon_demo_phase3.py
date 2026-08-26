@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+import os
 
 from app.models import ChangeEvent, AuthorityIntelligenceAssessmentV1, IntelligenceClassification
 from app.services.firestore_store import InMemoryRunStore
@@ -113,14 +114,14 @@ async def run_hackathon_demo(live: bool):
 
     if live:
         settings = Settings(
-            google_cloud_project="commercegov-vertex-2026",
-            google_cloud_location="us-central1",
-            gemini_model="gemini-3.1-pro-preview",
-            firestore_database="(default)",
+            google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+            google_cloud_location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
+            firestore_database=os.getenv("FIRESTORE_DATABASE", "(default)"),
             use_in_memory_store=True,
-            commercegov_api_url="https://mock.commercegov.local",
-            commercegov_api_token="mock_token",
-            taskmaster_api_token="mock_token"
+            commercegov_api_url=os.getenv("COMMERCEGOV_API_URL", "https://mock.commercegov.local"),
+            commercegov_api_token=os.getenv("COMMERCEGOV_API_TOKEN", "mock_token"),
+            taskmaster_api_token=os.getenv("TASKMASTER_API_TOKEN", "mock_token")
         )
         assessor = AdkGeminiIntelligenceAssessor(settings)
     else:

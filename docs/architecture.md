@@ -30,24 +30,31 @@ Phase 3 introduces the Authority Intelligence layer which reasons across multipl
 
 **Conceptual Architecture:**
 
-```text
-CommerceGov / operational events
-        ↓
-Taskmaster
-        ↓
-Authority Intelligence
-        ↓
-Gemini correlation/relevance reasoning
-        ↓
-Python deterministic enforcement
-        ↓
-Firestore operational memory
-        ↓
-NO_ACTION_REQUIRED
-        OR
-operator attention/task
-        ↓
-CommerceGov / human workflow
+```mermaid
+flowchart TD
+    E[Commerce Event] --> T[Taskmaster / Event Lifecycle]
+    T --> H[(Bounded Firestore History)]
+    H --> ADK[Google ADK]
+    ADK --> G[Gemini 3.5]
+    G --> SAI[Structured Authority Intelligence]
+    SAI --> PE[Deterministic Python Enforcement]
+    
+    PE --> N[Attention / Escalation / Governed Proposal]
+    PE --> B[BLOCKED / SUPPRESSED]
+    
+    N --> CB[CommerceGov Governance Boundary]
+    B --> CB
+    
+    CB -.- NO_AUTH[NO DIRECT SHOPIFY WRITE]
+    
+    classDef boundary fill:#f9d0c4,stroke:#333,stroke-width:2px;
+    class CB boundary;
+    classDef ai fill:#d4e6f1,stroke:#333,stroke-width:2px;
+    class ADK,G ai;
+    classDef enforced fill:#d5f5e3,stroke:#333,stroke-width:2px;
+    class PE,H enforced;
+    classDef red fill:#f1948a,stroke:#333,stroke-width:2px,color:#fff;
+    class NO_AUTH red;
 ```
 
 **Core Components:**

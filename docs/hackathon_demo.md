@@ -28,7 +28,7 @@ python hackathon_demo.py --live
 
 ## Google Technologies Used
 - **Google ADK:** For bounded and schema-constrained LLM agent invocation.
-- **Vertex AI Gemini:** `gemini-3.1-pro-preview` for deep reasoning.
+- **Vertex AI Gemini:** `gemini-3.5-flash` for deep reasoning.
 - **Firestore:** Distributed locking and single-flight lease management.
 - **Cloud Run:** Readied for serverless Dockerized deployment.
 - **Pub/Sub:** Compatible adapter for seamless async integration.

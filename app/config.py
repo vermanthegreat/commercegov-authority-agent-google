@@ -18,7 +18,7 @@ class Settings:
         return cls(
             google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT"),
             google_cloud_location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
             firestore_database=os.getenv("FIRESTORE_DATABASE", "(default)"),
             use_in_memory_store=os.getenv("USE_IN_MEMORY_STORE", "false").lower() == "true",
             commercegov_api_url=os.getenv("COMMERCEGOV_API_URL"),

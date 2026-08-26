@@ -359,13 +359,15 @@ async def test_history_dependent_semantic_correlation(intelligence_event_payload
     ))
     await process_operational_event(evt1, store, assessor1)
 
-    # Event 2 behavior changes based on history
+    # Event 2 behavior changes based on structured history context
     class HistoryDependentAssessor:
         async def assess(self, event_data, history):
-            if history:
+            # Inspect structured history instead of just boolean presence
+            has_relevant_past = sum(1 for h in history if h.get("classification") == "INFORMATIONAL") >= 1
+            if has_relevant_past:
                 return AuthorityIntelligenceAssessmentV1(
                     classification=IntelligenceClassification.ACTION_REQUIRED,
-                    summary="History dictates action", reason="History exists", evidence_refs=["evt_hist"], affected_scope="Product", recommended_operator_action="REVIEW_AND_APPROVE"
+                    summary="History dictates action", reason="History shows relevant past.", evidence_refs=["evt_hist"], affected_scope="Product", recommended_operator_action="REVIEW_AND_APPROVE"
                 )
             return AuthorityIntelligenceAssessmentV1(
                 classification=IntelligenceClassification.NO_ACTION_REQUIRED,
@@ -373,15 +375,16 @@ async def test_history_dependent_semantic_correlation(intelligence_event_payload
             )
 
     assessor2 = HistoryDependentAssessor()
-    
+
+    # The canonical current event MUST be byte-for-byte identical for both runs
+    canonical_current_event = intelligence_event_payload.model_copy(update={"event_id": "evt_curr_canonical"})
+
     # Run with history (isolated run on same store)
-    evt2 = intelligence_event_payload.model_copy(update={"event_id": "evt_curr_1"})
-    run2 = await process_operational_event(evt2, store, assessor2)
+    run2 = await process_operational_event(canonical_current_event, store, assessor2)
     assert run2["intelligence_classification"] == "ACTION_REQUIRED"
-    
+
     # Run without history (empty store)
     empty_store = InMemoryRunStore()
-    evt3 = intelligence_event_payload.model_copy(update={"event_id": "evt_curr_2"})
-    run3 = await process_operational_event(evt3, empty_store, assessor2)
+    run3 = await process_operational_event(canonical_current_event, empty_store, assessor2)
     assert run3["status"] == WorkflowStatus.SUPPRESSED.value
     assert run3["intelligence_classification"] == "NO_ACTION_REQUIRED"

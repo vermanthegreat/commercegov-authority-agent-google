@@ -171,9 +171,62 @@ def test_create_run_cannot_approve_or_apply(authenticated_app):
     # No direct write to Shopify
 
 def test_firestore_and_in_memory_stores_preserve_equivalent_semantics(monkeypatch):
-    monkeypatch.setenv("TASKMASTER_API_TOKEN", "secret-token")
-    
-    # We can mock firestore transaction to test its semantics, but we already have unit tests for it.
-    # We'll rely on the existing single-flight tests to ensure equivalent store semantics,
-    # as claim_event is used across the board.
-    pass
+    from tests.test_firestore_single_flight import FakeFirestoreClient, transactional, SERVER_TIMESTAMP
+    import google.cloud
+    from types import SimpleNamespace
+    from app.services.firestore_store import FirestoreRunStore, InMemoryRunStore
+
+    module = SimpleNamespace(SERVER_TIMESTAMP=SERVER_TIMESTAMP, transactional=transactional)
+    monkeypatch.setattr(google.cloud, "firestore", module, raising=False)
+
+    fs_client = FakeFirestoreClient()
+    fs_store = FirestoreRunStore.__new__(FirestoreRunStore)
+    fs_store._client = fs_client
+
+    im_store = InMemoryRunStore()
+
+    event = ChangeEvent(
+        event_id="evt-eq",
+        change_id="chg-eq",
+        agency_id="tenant-1",
+        shop_id="shop",
+        target_type="product",
+        target_id="1",
+        mutation_class="product.title",
+        current_value="old",
+        proposed_value="new",
+    )
+
+    # 1. Claim event
+    res_im, run_im = im_store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-1", 60)
+    res_fs, run_fs = fs_store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-1", 60)
+
+    assert res_im == res_fs
+    assert run_im["status"] == run_fs["status"] == WorkflowStatus.PROCESSING.value
+    assert run_im["event_id"] == run_fs["event_id"] == "evt-eq"
+    assert run_im["shop_id"] == run_fs["shop_id"] == "shop"
+
+    # 2. Duplicate claim (idempotent replay)
+    res_im2, _ = im_store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-2", 60)
+    res_fs2, _ = fs_store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-2", 60)
+    from app.models import ClaimResult
+    assert res_im2 == res_fs2 == ClaimResult.IN_PROGRESS
+
+    # 3. Begin assessment
+    state_im = im_store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_im["attempt"])
+    state_fs = fs_store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_fs["attempt"])
+    assert state_im["status"] == state_fs["status"] == WorkflowStatus.ASSESSING.value
+
+    # 4. Terminal immutability
+    settle_im = im_store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_im["attempt"], status=WorkflowStatus.FAILED.value, reason="failed")
+    settle_fs = fs_store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_fs["attempt"], status=WorkflowStatus.FAILED.value, reason="failed")
+
+    assert settle_im["status"] == settle_fs["status"] == WorkflowStatus.FAILED.value
+    assert settle_im["reason"] == settle_fs["reason"] == "failed"
+
+    # Attempt to settle again
+    settle_im2 = im_store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_im["attempt"], status=WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value, reason="changed")
+    settle_fs2 = fs_store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_fs["attempt"], status=WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value, reason="changed")
+
+    assert settle_im2["status"] == settle_fs2["status"] == WorkflowStatus.FAILED.value
+    assert settle_im2["reason"] == settle_fs2["reason"] == "failed"

@@ -18,25 +18,18 @@ class DeterministicFakeIntelligenceAssessor(IntelligenceAssessor):
         logger.info(f"   [Intelligence] Historical context size: {len(history)}")
 
         val = event["proposed_value"].lower()
-        if "history-dependent" in val:
-            if history:
-                return AuthorityIntelligenceAssessmentV1(
-                    classification=IntelligenceClassification.ACTION_REQUIRED,
-                    summary="History dictates action",
-                    reason="Event is actionable because history exists.",
-                    evidence_refs=[h["event_id"] for h in history],
-                    affected_scope="Product Title",
-                    recommended_operator_action="REVIEW_AND_APPROVE"
-                )
-            else:
-                return AuthorityIntelligenceAssessmentV1(
-                    classification=IntelligenceClassification.NO_ACTION_REQUIRED,
-                    summary="No history, no action",
-                    reason="Event is safe when isolated.",
-                    affected_scope="Product Title",
-                    recommended_operator_action="NONE"
-                )
-        elif "harmless" in val:
+        
+        if len(history) >= 1:
+            return AuthorityIntelligenceAssessmentV1(
+                classification=IntelligenceClassification.ACTION_REQUIRED,
+                summary="History dictates action",
+                reason="Event is actionable because history exists.",
+                evidence_refs=[h["event_id"] for h in history],
+                affected_scope="Product Title",
+                recommended_operator_action="REVIEW_AND_APPROVE"
+            )
+
+        if "harmless" in val:
             return AuthorityIntelligenceAssessmentV1(
                 classification=IntelligenceClassification.NO_ACTION_REQUIRED,
                 summary="Routine update",
@@ -173,19 +166,21 @@ async def run_hackathon_demo(live: bool):
     await print_run("6. SAME TARGET, DIFFERENT CONCERN", evt6, store, assessor) 
 
     # 7. HISTORY-DEPENDENT SEMANTIC CORRELATION
-    # 7a. First, evaluate without history
-    evt7_a = make_event("evt-107", "history-dependent")
-    evt7_a.mutation_class = "product.vendor"
-    await print_run("7a. HISTORY-DEPENDENT (ISOLATED - NO HISTORY)", evt7_a, store, assessor)
+    # We use exactly the same event, but process it in two different histories
+    evt7 = make_event("evt-107", "drift condition")
+    evt7.mutation_class = "product.vendor"
 
-    # Now add some history on that same target/concern
+    # 7a. First, evaluate without history using an isolated empty store
+    isolated_store = InMemoryRunStore()
+    await print_run("7a. HISTORY-DEPENDENT (ISOLATED - NO HISTORY)", evt7, isolated_store, assessor)
+
+    # Now add some history to the main store on that same target/concern
     evt7_history = make_event("evt-107-hist", "informational update")
     evt7_history.mutation_class = "product.vendor"
     await process_operational_event(evt7_history, store, assessor)
-    
-    evt7_b = make_event("evt-108", "history-dependent")
-    evt7_b.mutation_class = "product.vendor"
-    await print_run("7b. HISTORY-DEPENDENT (CORRELATED - WITH HISTORY)", evt7_b, store, assessor)
+
+    # 7b. Evaluate with history using the main store
+    await print_run("7b. HISTORY-DEPENDENT (CORRELATED - WITH HISTORY)", evt7, store, assessor)
 
     print("\n==================================================")
     print("DEMO COMPLETE")

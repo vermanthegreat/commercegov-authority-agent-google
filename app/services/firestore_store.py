@@ -16,9 +16,9 @@ class RunStore(Protocol):
     def release_claim(self, namespace: str, event_id: str, owner_id: str, attempt: int) -> dict[str, Any]: ...
     def list_events(self, namespace: str, shop_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
     def get_stats(self, namespace: str) -> dict[str, int]: ...
-    def upsert_attention(self, attention_key: str, data: dict[str, Any]) -> dict[str, Any]: ...
-    def get_attention(self, attention_key: str) -> dict[str, Any] | None: ...
-    def get_history(self, attention_key: str, limit: int = 10) -> list[dict[str, Any]]: ...
+    def upsert_attention(self, namespace: str, attention_key: str, update_fn: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]: ...
+    def get_attention(self, namespace: str, attention_key: str) -> dict[str, Any] | None: ...
+    def get_history(self, namespace: str, attention_key: str, limit: int = 10) -> list[dict[str, Any]]: ...
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -32,30 +32,32 @@ class InMemoryRunStore:
         self._monotonic_clock = monotonic_clock
         self._claim_clocks: dict[str, float] = {}
 
-    def upsert_attention(self, attention_key: str, update_fn: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
+    def upsert_attention(self, namespace: str, attention_key: str, update_fn: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
         with self._lock:
             now = _now()
-            existing = self.attentions.get(attention_key)
+            full_key = f"{namespace}:{attention_key}"
+            existing = self.attentions.get(full_key)
             new_data = update_fn(deepcopy(existing) if existing else None)
             if existing:
-                self.attentions[attention_key].update(new_data)
-                self.attentions[attention_key]["updated_at"] = now
+                self.attentions[full_key].update(new_data)
+                self.attentions[full_key]["updated_at"] = now
             else:
-                self.attentions[attention_key] = deepcopy(new_data)
-                self.attentions[attention_key]["created_at"] = now
-                self.attentions[attention_key]["updated_at"] = now
-            return deepcopy(self.attentions[attention_key])
+                self.attentions[full_key] = deepcopy(new_data)
+                self.attentions[full_key]["created_at"] = now
+                self.attentions[full_key]["updated_at"] = now
+            return deepcopy(self.attentions[full_key])
 
-    def get_attention(self, attention_key: str) -> dict[str, Any] | None:
+    def get_attention(self, namespace: str, attention_key: str) -> dict[str, Any] | None:
         with self._lock:
-            item = self.attentions.get(attention_key)
+            full_key = f"{namespace}:{attention_key}"
+            item = self.attentions.get(full_key)
             return deepcopy(item) if item else None
 
-    def get_history(self, attention_key: str, limit: int = 10) -> list[dict[str, Any]]:
+    def get_history(self, namespace: str, attention_key: str, limit: int = 10) -> list[dict[str, Any]]:
         with self._lock:
             matching = [
                 run for run in self.runs.values() 
-                if run.get("attention_key") == attention_key
+                if run.get("attention_key") == attention_key and run.get("namespace") == namespace
             ]
             matching.sort(key=lambda r: r.get("created_at", ""), reverse=True)
             return [deepcopy(r) for r in matching[:limit]]
@@ -76,6 +78,7 @@ class InMemoryRunStore:
                     "event_id": event.event_id,
                     "namespace": namespace,
                     "change_id": event.change_id,
+                    "agency_id": event.agency_id,
                     "shop_id": event.shop_id,
                     "target_type": event.target_type,
                     "target_id": event.target_id,
@@ -212,9 +215,10 @@ class FirestoreRunStore:
     def _doc(self, namespace: str, event_id: str):
         return self._client.collection(self.COLLECTION).document(f"{namespace}:{event_id}")
 
-    def upsert_attention(self, attention_key: str, update_fn: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
+    def upsert_attention(self, namespace: str, attention_key: str, update_fn: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
         from google.cloud import firestore
-        doc_ref = self._client.collection(self.ATTENTION_COLLECTION).document(attention_key)
+        full_key = f"{namespace}:{attention_key}"
+        doc_ref = self._client.collection(self.ATTENTION_COLLECTION).document(full_key)
 
         @firestore.transactional
         def _transactional_upsert(transaction):
@@ -235,16 +239,19 @@ class FirestoreRunStore:
 
         return _transactional_upsert(self._client.transaction())
 
-    def get_attention(self, attention_key: str) -> dict[str, Any] | None:
-        doc_ref = self._client.collection(self.ATTENTION_COLLECTION).document(attention_key)
+    def get_attention(self, namespace: str, attention_key: str) -> dict[str, Any] | None:
+        full_key = f"{namespace}:{attention_key}"
+        doc_ref = self._client.collection(self.ATTENTION_COLLECTION).document(full_key)
         snapshot = doc_ref.get()
         return snapshot.to_dict() if snapshot.exists else None
 
-    def get_history(self, attention_key: str, limit: int = 10) -> list[dict[str, Any]]:
+    def get_history(self, namespace: str, attention_key: str, limit: int = 10) -> list[dict[str, Any]]:
         from google.cloud.firestore_v1.base_query import FieldFilter
         # Requires composite index in production, but okay for mock/testing
         query = self._client.collection(self.COLLECTION).where(
             filter=FieldFilter("attention_key", "==", attention_key)
+        ).where(
+            filter=FieldFilter("namespace", "==", namespace)
         )
         matching = (doc.to_dict() for doc in query.stream())
         sorted_matching = sorted(matching, key=lambda r: str(r.get("created_at", "")), reverse=True)
@@ -267,6 +274,7 @@ class FirestoreRunStore:
                     "event_id": event.event_id,
                     "namespace": namespace,
                     "change_id": event.change_id,
+                    "agency_id": event.agency_id,
                     "shop_id": event.shop_id,
                     "target_type": event.target_type,
                     "target_id": event.target_id,

@@ -33,12 +33,12 @@ async def test_forced_concurrency_downgrade():
     
     assessor_high = FakeIntelligenceAssessor(AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.ACTION_REQUIRED,
-        summary="High", reason="High", evidence_refs=[], affected_scope="Scope", recommended_operator_action="Action"
+        summary="High", reason="High", evidence_refs=[], affected_scope="Scope", recommended_operator_action="NONE"
     ))
     
     assessor_low = FakeIntelligenceAssessor(AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.INFORMATIONAL,
-        summary="Low", reason="Low", evidence_refs=[], affected_scope="Scope", recommended_operator_action="Action"
+        summary="Low", reason="Low", evidence_refs=[], affected_scope="Scope", recommended_operator_action="NONE"
     ))
     
     # We simulate the exact concurrent race condition by doing it manually inside a patched upsert_attention,
@@ -61,7 +61,7 @@ async def test_duplicate_concurrent_attention():
     
     assessor = FakeIntelligenceAssessor(AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.REVIEW_REQUIRED,
-        summary="S", reason="R", evidence_refs=[], affected_scope="S", recommended_operator_action="A"
+        summary="S", reason="R", evidence_refs=[], affected_scope="S", recommended_operator_action="NONE"
     ))
     
     await asyncio.gather(
@@ -133,7 +133,7 @@ async def test_substantive_gemini_history():
     event = make_event("e1", "tenant-1", "shop-1", "t1", "c1")
     assessor = FakeIntelligenceAssessor(AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.REVIEW_REQUIRED,
-        summary="Summ", reason="Rsn", evidence_refs=["ref1"], affected_scope="Scope", recommended_operator_action="Act"
+        summary="Summ", reason="Rsn", evidence_refs=["ref1"], affected_scope="Scope", recommended_operator_action="NONE"
     ))
     
     run = await process_operational_event(event, store, assessor)
@@ -145,7 +145,7 @@ async def test_substantive_gemini_history():
             self.history = history
             return AuthorityIntelligenceAssessmentV1(
                 classification=IntelligenceClassification.REVIEW_REQUIRED,
-                summary="S", reason="R", evidence_refs=[], affected_scope="S", recommended_operator_action="A"
+                summary="S", reason="R", evidence_refs=[], affected_scope="S", recommended_operator_action="NONE"
             )
             
     spy = HistorySpyAssessor()
@@ -175,6 +175,7 @@ def test_firestore_contention_forces_retry_and_preserves_high_severity(monkeypat
             self.force_contention = False
             self.contention_data = None
             self.has_retried = False
+            self.reads = set()
         def update(self, doc_ref, data):
             self.updates[doc_ref.key] = data
         def create(self, doc_ref, data):
@@ -185,12 +186,24 @@ def test_firestore_contention_forces_retry_and_preserves_high_severity(monkeypat
             while True:
                 try:
                     transaction.updates = {}
+                    transaction.reads = set()
                     res = fn(transaction, *args, **kwargs)
+                    
+                    # Simulation of commit conflict: 
+                    # If we read the document and we want to force contention,
+                    # we simulate that someone else wrote to it AFTER our read but BEFORE our commit.
+                    if getattr(transaction, "force_contention", False) and not transaction.has_retried:
+                        # Someone else committed strong data!
+                        for k in transaction.reads:
+                            transaction.db[k] = transaction.contention_data
+                        transaction.has_retried = True
+                        raise Exception("Contention at commit!")
+
                     for k, v in transaction.updates.items():
                         transaction.db[k] = v
                     return res
                 except Exception as e:
-                    if str(e) == "Contention!":
+                    if str(e) == "Contention at commit!":
                         continue
                     raise
         return wrapper
@@ -210,11 +223,8 @@ def test_firestore_contention_forces_retry_and_preserves_high_severity(monkeypat
             self.key = key
             self.db = db
         def get(self, transaction=None):
-            if transaction:
-                if getattr(transaction, "force_contention", False) and not transaction.has_retried:
-                    self.db[self.key] = transaction.contention_data
-                    transaction.has_retried = True
-                    raise Exception("Contention!")
+            if transaction is not None:
+                transaction.reads.add(self.key)
             return FakeSnapshot(self.key in self.db, self.db.get(self.key))
 
     class FakeCollection:
@@ -251,7 +261,7 @@ def test_firestore_contention_forces_retry_and_preserves_high_severity(monkeypat
         "reason": "High Rsn",
         "affected_scope": "High Scope",
         "evidence_refs": ["strong_ref"],
-        "recommended_operator_action": "Action",
+        "recommended_operator_action": "NONE",
         "last_event_id": "strong_event"
     }
 
@@ -259,7 +269,7 @@ def test_firestore_contention_forces_retry_and_preserves_high_severity(monkeypat
 
     assessment = AuthorityIntelligenceAssessmentV1(  
         classification=IntelligenceClassification.INFORMATIONAL,
-        summary="Low Sum", reason="Low Rsn", evidence_refs=["weak_ref"], affected_scope="Low Scope", recommended_operator_action="Low Action"
+        summary="Low Sum", reason="Low Rsn", evidence_refs=["weak_ref"], affected_scope="Low Scope", recommended_operator_action="NONE"
     )
 
     severity_order = {
@@ -291,7 +301,7 @@ def test_firestore_contention_forces_retry_and_preserves_high_severity(monkeypat
     store._client.transaction = lambda: txn
 
     # Run upsert_attention!
-    res = store.upsert_attention("att_key", _compute_attention_update)
+    res = store.upsert_attention("authority_intelligence", "att_key", _compute_attention_update)
 
     # Assert contention was forced
     assert txn.has_retried is True
@@ -322,7 +332,47 @@ def test_prose_injection():
             "summary": "Looks good",
             "reason": "Because I said so",
             "affected_scope": "all",
-            "recommended_operator_action": "Approve",
+            "recommended_operator_action": "NONE",
             "approve": true,
             "apply": true
         }''')
+
+@pytest.mark.asyncio
+async def test_equal_severity_order_independent():
+    store1 = InMemoryRunStore()
+    store2 = InMemoryRunStore()
+    
+    evtA = make_event("eA", "tenant-1", "shop-1", "t1", "c1")
+    evtB = make_event("eB", "tenant-1", "shop-1", "t1", "c1")
+
+    assessorA = FakeIntelligenceAssessor(AuthorityIntelligenceAssessmentV1(
+        classification=IntelligenceClassification.REVIEW_REQUIRED,
+        summary="SumA", reason="RsnA", evidence_refs=["refA"], affected_scope="Scope", recommended_operator_action="NONE"
+    ))
+    assessorB = FakeIntelligenceAssessor(AuthorityIntelligenceAssessmentV1(
+        classification=IntelligenceClassification.REVIEW_REQUIRED,
+        summary="SumB", reason="RsnB", evidence_refs=["refB"], affected_scope="Scope", recommended_operator_action="NONE"
+    ))
+
+    # Order A -> B
+    await process_operational_event(evtA, store1, assessorA)
+    await process_operational_event(evtB, store1, assessorB)
+    
+    # Order B -> A
+    await process_operational_event(evtB, store2, assessorB)
+    await process_operational_event(evtA, store2, assessorA)
+    
+    att1 = list(store1.attentions.values())[0]
+    att2 = list(store2.attentions.values())[0]
+    
+    # Ignore timestamps for equality check
+    att1.pop("updated_at", None)
+    att1.pop("created_at", None)
+    att2.pop("updated_at", None)
+    att2.pop("created_at", None)
+    
+    # Sort evidence refs
+    att1["evidence_refs"].sort()
+    att2["evidence_refs"].sort()
+
+    assert att1 == att2

@@ -152,6 +152,7 @@ async def test_commercegov_deterministic_proposal_failure_is_terminal(event, ass
     assert run["status"] == WorkflowStatus.FAILED.value
     assert "Rejected by CommerceGov" in run["reason"]
     assert "proposal_id" not in run
+    assert run["agency_id"] == event.agency_id
 
     # Terminal replay prevents duplicate assessment
     claim, _ = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b")
@@ -178,6 +179,7 @@ async def test_commercegov_transient_proposal_failure_is_terminal(event, assessm
     assert run["status"] == WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN.value
     assert "Network timeout" in run["reason"]
     assert "proposal_id" not in run
+    assert run["agency_id"] == event.agency_id
 
     # Terminal replay prevents duplicate assessment
     claim, _ = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b")

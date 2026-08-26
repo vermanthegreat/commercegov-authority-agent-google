@@ -93,6 +93,14 @@ class IntelligenceClassification(str, Enum):
     ACTION_REQUIRED = "ACTION_REQUIRED"
 
 
+class OperatorAction(str, Enum):
+    NONE = "NONE"
+    REVIEW_AND_APPROVE = "REVIEW_AND_APPROVE"
+    INVESTIGATE_RISK = "INVESTIGATE_RISK"
+    REJECT = "REJECT"
+    MITIGATE_AND_CONTINUE = "MITIGATE_AND_CONTINUE"
+
+
 class AuthorityIntelligenceAssessmentV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -102,7 +110,7 @@ class AuthorityIntelligenceAssessmentV1(BaseModel):
     reason: str = Field(min_length=1)
     evidence_refs: list[str] = Field(default_factory=list)
     affected_scope: str
-    recommended_operator_action: str
+    recommended_operator_action: OperatorAction
 
 
 class PipelineNamespace(str, Enum):

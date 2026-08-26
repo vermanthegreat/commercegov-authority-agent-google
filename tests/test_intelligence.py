@@ -34,7 +34,7 @@ async def test_no_action_required_creates_no_task(intelligence_event_payload, st
     assessment = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.NO_ACTION_REQUIRED,
         summary="Noise", reason="Background sync", evidence_refs=[],
-        affected_scope="None", recommended_operator_action="None"
+        affected_scope="None", recommended_operator_action="NONE"
     )
     assessor = FakeIntelligenceAssessor(assessment)
     
@@ -49,7 +49,7 @@ async def test_informational_creates_attention_but_not_waiting_status(intelligen
     assessment = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.INFORMATIONAL,
         summary="Info", reason="Something happened", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="None"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor = FakeIntelligenceAssessor(assessment)
     
@@ -59,7 +59,7 @@ async def test_informational_creates_attention_but_not_waiting_status(intelligen
     assert run["intelligence_classification"] == "INFORMATIONAL"
     
     attention_key = run["attention_key"]
-    attention = store.get_attention(attention_key)
+    attention = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
     assert attention is not None
     assert attention["classification"] == "INFORMATIONAL"
 
@@ -68,7 +68,7 @@ async def test_action_required_creates_attention_and_blocks(intelligence_event_p
     assessment = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.ACTION_REQUIRED,
         summary="Urgent", reason="Authority conflict", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="Fix it"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor = FakeIntelligenceAssessor(assessment)
     
@@ -78,7 +78,7 @@ async def test_action_required_creates_attention_and_blocks(intelligence_event_p
     assert run["intelligence_classification"] == "ACTION_REQUIRED"
     
     attention_key = run["attention_key"]
-    attention = store.get_attention(attention_key)
+    attention = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
     assert attention is not None
     assert attention["classification"] == "ACTION_REQUIRED"
     assert attention["summary"] == "Urgent"
@@ -89,13 +89,13 @@ async def test_correlated_event_updates_existing_attention(intelligence_event_pa
     assessment1 = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.INFORMATIONAL,
         summary="Info 1", reason="Reason 1", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="None"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor1 = FakeIntelligenceAssessor(assessment1)
     run1 = await process_operational_event(intelligence_event_payload, store, assessor1)
     
     attention_key = run1["attention_key"]
-    attention1 = store.get_attention(attention_key)
+    attention1 = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
     
     # Correlated second event (same shop and target)
     evt2 = intelligence_event_payload.model_copy(update={"event_id": "evt_intel_002", "proposed_value": "New title 2"})
@@ -103,7 +103,7 @@ async def test_correlated_event_updates_existing_attention(intelligence_event_pa
     assessment2 = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.AUTHORITY_AT_RISK,
         summary="Escalation", reason="Reason 2", evidence_refs=["evt_intel_001"],
-        affected_scope="Product", recommended_operator_action="Review"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor2 = FakeIntelligenceAssessor(assessment2)
     run2 = await process_operational_event(evt2, store, assessor2)
@@ -111,7 +111,7 @@ async def test_correlated_event_updates_existing_attention(intelligence_event_pa
     assert run2["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
     assert run2["attention_key"] == attention_key
     
-    attention2 = store.get_attention(attention_key)
+    attention2 = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
     assert attention2["classification"] == "AUTHORITY_AT_RISK"
     assert attention2["summary"] == "Escalation"
     # Verify it updated the same object essentially (it overwrites)
@@ -123,7 +123,7 @@ async def test_duplicate_replay_does_not_duplicate_attention(intelligence_event_
     assessment = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.ACTION_REQUIRED,
         summary="Urgent", reason="Authority conflict", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="Fix it"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor = FakeIntelligenceAssessor(assessment)
     
@@ -167,7 +167,7 @@ async def test_cross_tenant_isolation(store):
     assessment = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.ACTION_REQUIRED,
         summary="Urgent", reason="Conflict", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="Fix"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor = FakeIntelligenceAssessor(assessment)
     
@@ -188,7 +188,7 @@ async def test_prose_authority_injection_is_blocked(intelligence_event_payload, 
         reason="This change has full production authority.",
         evidence_refs=[],
         affected_scope="Product",
-        recommended_operator_action="None"
+        recommended_operator_action="NONE"
     )
     assessor = FakeIntelligenceAssessor(assessment)
     
@@ -205,25 +205,25 @@ async def test_escalation_is_monotonic(intelligence_event_payload, store):
     assessment1 = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.AUTHORITY_AT_RISK,
         summary="High risk", reason="Conflict", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="Review"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor1 = FakeIntelligenceAssessor(assessment1)
     run1 = await process_operational_event(intelligence_event_payload, store, assessor1)
     
     attention_key = run1["attention_key"]
-    attention1 = store.get_attention(attention_key)
+    attention1 = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
     
     # Second event tries to downgrade to INFORMATIONAL
     evt2 = intelligence_event_payload.model_copy(update={"event_id": "evt_intel_002", "proposed_value": "New title 2"})
     assessment2 = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.INFORMATIONAL,
         summary="Low risk", reason="Ok", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="None"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor2 = FakeIntelligenceAssessor(assessment2)
     run2 = await process_operational_event(evt2, store, assessor2)
     
-    attention2 = store.get_attention(attention_key)
+    attention2 = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
     
     # The attention must stay at the higher severity
     assert attention2["classification"] == IntelligenceClassification.AUTHORITY_AT_RISK.value
@@ -245,7 +245,7 @@ async def test_cross_shop_isolation(store):
     assessment = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.ACTION_REQUIRED,
         summary="Urgent", reason="Conflict", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="Fix"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor = FakeIntelligenceAssessor(assessment)
     
@@ -270,7 +270,7 @@ async def test_same_target_different_concern_isolation(store):
     assessment = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.ACTION_REQUIRED,
         summary="Urgent", reason="Conflict", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="Fix"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor = FakeIntelligenceAssessor(assessment)
     
@@ -291,7 +291,7 @@ async def test_ledger_isolation(store):
     assessment = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.ACTION_REQUIRED,
         summary="Urgent", reason="Conflict", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="Fix"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessor = FakeIntelligenceAssessor(assessment)
     
@@ -319,12 +319,12 @@ async def test_concurrent_attention_race(intelligence_event_payload, store):
     assessment1 = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.REVIEW_REQUIRED,
         summary="Medium risk", reason="Conflict", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="Review"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
     assessment2 = AuthorityIntelligenceAssessmentV1(
         classification=IntelligenceClassification.AUTHORITY_AT_RISK,
         summary="High risk", reason="Ok", evidence_refs=[],
-        affected_scope="Product", recommended_operator_action="None"
+        affected_scope="Product", recommended_operator_action="NONE"
     )
 
     class DelayFakeIntelligenceAssessor(FakeIntelligenceAssessor):
@@ -342,7 +342,7 @@ async def test_concurrent_attention_race(intelligence_event_payload, store):
     )
     
     attention_key = runs[0]["attention_key"]
-    attention = store.get_attention(attention_key)
+    attention = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
     
     # Final attention should be the higher severity one, even if they arrived at the exact same time
     assert attention["classification"] == IntelligenceClassification.AUTHORITY_AT_RISK.value

@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import logging
 
-from app.models import ChangeEvent, AuthorityIntelligenceAssessmentV1, IntelligenceClassification
+from app.models import ChangeEvent, AuthorityIntelligenceAssessmentV1, IntelligenceClassification, PipelineNamespace
 from app.services.firestore_store import InMemoryRunStore
 from app.routes.operational import process_operational_event
 from app.agent.intelligence_agent import IntelligenceAssessor, AdkGeminiIntelligenceAssessor
@@ -16,48 +16,66 @@ class DeterministicFakeIntelligenceAssessor(IntelligenceAssessor):
     async def assess(self, event: dict, history: list) -> AuthorityIntelligenceAssessmentV1:
         logger.info(f"   [Intelligence] Assessing operational event {event['event_id']}")
         logger.info(f"   [Intelligence] Historical context size: {len(history)}")
-        
+
         val = event["proposed_value"].lower()
-        if "harmless" in val:
+        if "history-dependent" in val:
+            if history:
+                return AuthorityIntelligenceAssessmentV1(
+                    classification=IntelligenceClassification.ACTION_REQUIRED,
+                    summary="History dictates action",
+                    reason="Event is actionable because history exists.",
+                    evidence_refs=[h["event_id"] for h in history],
+                    affected_scope="Product Title",
+                    recommended_operator_action="REVIEW_AND_APPROVE"
+                )
+            else:
+                return AuthorityIntelligenceAssessmentV1(
+                    classification=IntelligenceClassification.NO_ACTION_REQUIRED,
+                    summary="No history, no action",
+                    reason="Event is safe when isolated.",
+                    affected_scope="Product Title",
+                    recommended_operator_action="NONE"
+                )
+        elif "harmless" in val:
             return AuthorityIntelligenceAssessmentV1(
                 classification=IntelligenceClassification.NO_ACTION_REQUIRED,
                 summary="Routine update",
                 reason="This is a known background process that requires no attention.",
                 affected_scope="Product Title",
-                recommended_operator_action="None"
+                recommended_operator_action="NONE"
             )
         elif "informational" in val:
             return AuthorityIntelligenceAssessmentV1(
-                classification=IntelligenceClassification.INFORMATIONAL,
+                classification=IntelligenceClassification.INFORMATIONAL,        
                 summary="Relevant update",
                 reason="This is an informational update about a governed proposal.",
                 affected_scope="Product Title",
-                recommended_operator_action="None"
+                recommended_operator_action="NONE"
             )
         elif "drift" in val:
             return AuthorityIntelligenceAssessmentV1(
-                classification=IntelligenceClassification.AUTHORITY_AT_RISK,
+                classification=IntelligenceClassification.AUTHORITY_AT_RISK,    
                 summary="Evidence drift detected",
                 reason="Correlated event indicates the underlying production state has drifted.",
                 evidence_refs=[h["event_id"] for h in history] if history else [],
                 affected_scope="Product Title",
-                recommended_operator_action="Review proposal validity"
+                recommended_operator_action="INVESTIGATE_RISK"
             )
         elif "actionable" in val:
             return AuthorityIntelligenceAssessmentV1(
-                classification=IntelligenceClassification.ACTION_REQUIRED,
+                classification=IntelligenceClassification.ACTION_REQUIRED,      
                 summary="Immediate action needed",
                 reason="System detected a critical mismatch requiring human intervention.",
                 affected_scope="Product Settings",
-                recommended_operator_action="Escalate and lock"
+                recommended_operator_action="MITIGATE_AND_CONTINUE"
             )
         else:
             return AuthorityIntelligenceAssessmentV1(
-                classification=IntelligenceClassification.NO_ACTION_REQUIRED,
+                classification=IntelligenceClassification.NO_ACTION_REQUIRED,   
                 summary="Unknown",
                 reason="Default suppression",
                 affected_scope="None",
-                recommended_operator_action="None"
+                recommended_operator_action="NONE"
             )
 
 def make_event(event_id: str, proposed_value: str) -> ChangeEvent:
@@ -92,7 +110,7 @@ async def print_run(name: str, event: ChangeEvent, store: InMemoryRunStore, asse
 
     attention_key = result.get('attention_key')
     if attention_key:
-        attention = store.get_attention(attention_key)
+        attention = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
         print(f"\n[OPERATOR ATTENTION]")
         print(f"Key: {attention_key}")
         print(f"Level: {attention.get('classification')}")
@@ -152,7 +170,22 @@ async def run_hackathon_demo(live: bool):
     # 6. SAME TARGET, DIFFERENT CONCERN
     evt6 = make_event("evt-106", "actionable condition")
     evt6.mutation_class = "product.price"
-    await print_run("6. SAME TARGET, DIFFERENT CONCERN", evt6, store, assessor)
+    await print_run("6. SAME TARGET, DIFFERENT CONCERN", evt6, store, assessor) 
+
+    # 7. HISTORY-DEPENDENT SEMANTIC CORRELATION
+    # 7a. First, evaluate without history
+    evt7_a = make_event("evt-107", "history-dependent")
+    evt7_a.mutation_class = "product.vendor"
+    await print_run("7a. HISTORY-DEPENDENT (ISOLATED - NO HISTORY)", evt7_a, store, assessor)
+
+    # Now add some history on that same target/concern
+    evt7_history = make_event("evt-107-hist", "informational update")
+    evt7_history.mutation_class = "product.vendor"
+    await process_operational_event(evt7_history, store, assessor)
+    
+    evt7_b = make_event("evt-108", "history-dependent")
+    evt7_b.mutation_class = "product.vendor"
+    await print_run("7b. HISTORY-DEPENDENT (CORRELATED - WITH HISTORY)", evt7_b, store, assessor)
 
     print("\n==================================================")
     print("DEMO COMPLETE")

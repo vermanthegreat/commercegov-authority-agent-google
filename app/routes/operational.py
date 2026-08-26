@@ -30,7 +30,7 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
 
     import json; import hashlib; canonical = json.dumps({"tenant": event.agency_id, "shop": event.shop_id, "target": event.target_id, "type": event.target_type, "concern": event.mutation_class}, sort_keys=True, separators=(",",":")); attention_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     try:
-        history_runs = store.get_history(attention_key, limit=5)
+        history_runs = store.get_history(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key, limit=5)
     
         # Provide substantive but bounded history context
         history = [
@@ -110,12 +110,18 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
 
     def _compute_attention_update(current_attention: dict[str, Any] | None) -> dict[str, Any]:
         current_severity = -1
+        current_event_id = ""
         if current_attention:
             current_severity = severity_order.get(current_attention.get("classification"), -1)
+            current_event_id = current_attention.get("last_event_id", "")
 
         new_severity = severity_order.get(assessment.classification.value, -1)  
 
-        is_winning = new_severity >= current_severity
+        is_winning = False
+        if new_severity > current_severity:
+            is_winning = True
+        elif new_severity == current_severity:
+            is_winning = event.event_id > current_event_id
 
         return {
             "classification": assessment.classification.value if is_winning else current_attention.get("classification"),
@@ -127,7 +133,7 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
             "last_event_id": event.event_id if is_winning else current_attention.get("last_event_id")
         }
 
-    store.upsert_attention(attention_key, _compute_attention_update)
+    store.upsert_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key, _compute_attention_update)
 
 
     status = WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY if assessment.classification in [

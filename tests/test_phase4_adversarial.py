@@ -472,7 +472,7 @@ async def test_deterministic_assessor_history_content_swap():
         **shared_boundary,
         "event_id": "hist_1",
         "classification": "ACTION_REQUIRED",
-        "status": "WAITING_FOR_HUMAN_AUTHORITY",
+        "status": "HUMAN_AUTHORITY_REQUIRED",
         "target_id": current_event.target_id,
         "mutation_class": current_event.mutation_class,
     }]
@@ -481,7 +481,7 @@ async def test_deterministic_assessor_history_content_swap():
         **shared_boundary,
         "event_id": "hist_2",
         "classification": "ACTION_REQUIRED",
-        "status": "WAITING_FOR_HUMAN_AUTHORITY",
+        "status": "HUMAN_AUTHORITY_REQUIRED",
         "target_id": "other-target",
         "mutation_class": "other-concern",
     }]
@@ -501,7 +501,7 @@ async def test_deterministic_assessor_history_content_swap():
             **shared_boundary,
             "event_id": "hist_4",
             "classification": "AUTHORITY_AT_RISK",
-            "status": "WAITING_FOR_HUMAN_AUTHORITY",
+            "status": "HUMAN_AUTHORITY_REQUIRED",
             "target_id": "another-target",
             "mutation_class": current_event.mutation_class,
         },

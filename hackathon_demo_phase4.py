@@ -167,7 +167,7 @@ async def print_semantic_history_comparison(assessor: IntelligenceAssessor):
         **shared_boundary,
         "event_id": "evt-107-related-history",
         "classification": IntelligenceClassification.ACTION_REQUIRED.value,
-        "status": "WAITING_FOR_HUMAN_AUTHORITY",
+        "status": "HUMAN_AUTHORITY_REQUIRED",
         "target_id": event.target_id,
         "mutation_class": event.mutation_class,
     }]
@@ -175,7 +175,7 @@ async def print_semantic_history_comparison(assessor: IntelligenceAssessor):
         **shared_boundary,
         "event_id": "evt-107-unrelated-history",
         "classification": IntelligenceClassification.ACTION_REQUIRED.value,
-        "status": "WAITING_FOR_HUMAN_AUTHORITY",
+        "status": "HUMAN_AUTHORITY_REQUIRED",
         "target_id": "gid://shopify/Product/998877",
         "mutation_class": "product.price",
     }]

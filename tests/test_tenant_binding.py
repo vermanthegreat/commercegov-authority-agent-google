@@ -121,7 +121,7 @@ class CountingAssessor:
         self.calls += 1
         return AuthorityAssessment(
             change_id=event.change_id,
-            classification=Classification.AUTONOMOUSLY_CONTINUE,
+            classification=Classification.READY_FOR_GOVERNED_EXECUTION,
             risk_level=RiskLevel.low,
             reason="Safe to submit as a governed proposal.",
             policy_observations=[],

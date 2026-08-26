@@ -162,7 +162,7 @@ def test_firestore_terminal_is_immutable_and_fenced(firestore_store, event):
             event.event_id,
         "owner-a",
         run["attempt"],
-        status=WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value,
+        status=WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value,
         reason="original",
     )
     original = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)

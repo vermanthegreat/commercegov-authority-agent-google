@@ -74,7 +74,7 @@ async def test_action_required_creates_attention_and_blocks(intelligence_event_p
     
     run = await process_operational_event(intelligence_event_payload, store, assessor)
     
-    assert run["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
+    assert run["status"] == WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value
     assert run["intelligence_classification"] == "ACTION_REQUIRED"
     
     attention_key = run["attention_key"]
@@ -108,7 +108,7 @@ async def test_correlated_event_updates_existing_attention(intelligence_event_pa
     assessor2 = FakeIntelligenceAssessor(assessment2)
     run2 = await process_operational_event(evt2, store, assessor2)
     
-    assert run2["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
+    assert run2["status"] == WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value
     assert run2["attention_key"] == attention_key
     
     attention2 = store.get_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key)
@@ -296,7 +296,7 @@ async def test_ledger_isolation(store):
     assessor = FakeIntelligenceAssessor(assessment)
     
     run_intel = await process_operational_event(evt1, store, assessor)
-    assert run_intel["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
+    assert run_intel["status"] == WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value
     
     # Process through authority (simulate what process_event would do)
     from app.models import PipelineNamespace

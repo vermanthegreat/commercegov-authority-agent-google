@@ -19,8 +19,8 @@ python hackathon_demo.py --live
 ```
 
 ### The Six Scenarios:
-1. **Safe Continuation:** The model correctly determines the change aligns with policy. Taskmaster returns `AUTONOMOUSLY_CONTINUABLE` and creates a `CommerceGovProposalV1`.
-2. **Human Authority Required:** The model flags the change as subjective or risky. Taskmaster transitions to `WAITING_FOR_HUMAN_AUTHORITY`. No proposal is handed off.
+1. **Safe Continuation:** The model correctly determines the change aligns with policy. Taskmaster returns `READY_FOR_GOVERNED_EXECUTION` and creates a `CommerceGovProposalV1`.
+2. **Human Authority Required:** The model flags the change as subjective or risky. Taskmaster transitions to `HUMAN_AUTHORITY_REQUIRED`. No proposal is handed off.
 3. **Policy Block:** The model detects a banned keyword. Taskmaster halts execution as `BLOCKED`.
 4. **Duplicate Replay:** An identical event is received while a previous execution exists. Taskmaster returns `TERMINAL_REPLAY` safely without calling the LLM again.
 5. **Evidence Drift:** A new request reuses the old `event_id` but modifies the payload. Taskmaster detects the mismatched fingerprint and securely halts with `EVENT_ID_CONFLICT`.

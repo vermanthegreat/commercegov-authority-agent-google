@@ -29,12 +29,12 @@ def terminal_status(event: ChangeEvent, assessment: AuthorityAssessment) -> Work
     # This is the deterministic authority invariant. A model recommendation never
     # confers production authority and human-required events cannot be autonomous.
     if event.requires_human_approval:
-        return WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY
+        return WorkflowStatus.HUMAN_AUTHORITY_REQUIRED
     if assessment.classification == Classification.HUMAN_AUTHORITY_REQUIRED:
-        return WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY
+        return WorkflowStatus.HUMAN_AUTHORITY_REQUIRED
     if assessment.classification == Classification.BLOCKED:
         return WorkflowStatus.BLOCKED
-    return WorkflowStatus.AUTONOMOUSLY_CONTINUABLE
+    return WorkflowStatus.READY_FOR_GOVERNED_EXECUTION
 
 
 from app.services.commercegov_client import CommerceGovClient, CommerceGovTransientError, CommerceGovDeterministicError
@@ -117,7 +117,7 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
         raise RuntimeError("Deterministic authority enforcement failed") from exc
 
     proposal_id = None
-    if status == WorkflowStatus.AUTONOMOUSLY_CONTINUABLE and action == RecommendedNextAction.CONTINUE:
+    if status == WorkflowStatus.READY_FOR_GOVERNED_EXECUTION and action == RecommendedNextAction.CONTINUE:
         # Taskmaster does NOT have apply or approve authority.
         # It submits a governed proposal and stops.
         try:

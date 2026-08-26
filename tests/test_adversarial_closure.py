@@ -41,7 +41,7 @@ def event():
 def assessment():
     return AuthorityAssessment(
         change_id="chg-adv",
-        classification=Classification.AUTONOMOUSLY_CONTINUE,
+        classification=Classification.READY_FOR_GOVERNED_EXECUTION,
         risk_level=RiskLevel.low,
         reason="Looks good",
         recommended_next_action=RecommendedNextAction.CONTINUE
@@ -112,7 +112,7 @@ async def test_terminal_immutability_against_stale_worker(event, assessment, mon
     store.settle(
             PipelineNamespace.AUTHORITY_ASSESSMENT.value,
             event.event_id, "owner-b", run_b["attempt"], 
-        status=WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value,
+        status=WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value,
         reason="completed by B"
     )
     
@@ -127,7 +127,7 @@ async def test_terminal_immutability_against_stale_worker(event, assessment, mon
         store.mark_assessment_unknown(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-a", 1, "A failed")
         
     run = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)
-    assert run["status"] == WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value       
+    assert run["status"] == WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value       
     assert run["reason"] == "completed by B"
 
 

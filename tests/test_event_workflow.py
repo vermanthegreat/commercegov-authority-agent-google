@@ -9,19 +9,19 @@ def test_human_boundary_persists_waiting_state(app_with_fake, event_payload):
     app, _, assessor, cg_client = app_with_fake
     response = TestClient(app).post("/events/change", json=event_payload)
     assert response.status_code == 200
-    assert response.json()["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
+    assert response.json()["status"] == WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value
     assert assessor.calls == 1
 
 
 def test_human_requirement_cannot_be_bypassed_by_model(app_with_fake, event_payload):
     app, _, assessor, cg_client = app_with_fake
     assessor.result = assessor.result.model_copy(update={
-        "classification": Classification.AUTONOMOUSLY_CONTINUE,
+        "classification": Classification.READY_FOR_GOVERNED_EXECUTION,
         "recommended_next_action": RecommendedNextAction.CONTINUE,
     })
     response = TestClient(app).post("/events/change", json=event_payload)
     assert response.status_code == 200
-    assert response.json()["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
+    assert response.json()["status"] == WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value
     assert response.json()["classification"] == Classification.HUMAN_AUTHORITY_REQUIRED.value
 
 

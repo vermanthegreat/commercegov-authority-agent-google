@@ -78,7 +78,7 @@ def inject_history(store: InMemoryRunStore, event: ChangeEvent, related: bool):
             "affected_scope": event.mutation_class,
             "target_id": event.target_id,
             "mutation_class": event.mutation_class,
-            "status": WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value,
+            "status": WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value,
             "evidence_refs": ["evidence-1"],
             "created_at": "2026-08-25T12:00:00Z"
         }

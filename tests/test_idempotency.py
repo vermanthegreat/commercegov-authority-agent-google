@@ -190,7 +190,7 @@ def test_terminal_settlement_is_monotonic_and_idempotent(base_payload):
             event.event_id,
         "owner",
         run["attempt"],
-        status=WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value,
+        status=WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value,
         reason="original",
     )
 
@@ -207,7 +207,7 @@ def test_terminal_settlement_is_monotonic_and_idempotent(base_payload):
             event.event_id,
         "owner",
         run["attempt"],
-        status=WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value,
+        status=WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value,
         reason="different",
     )
 
@@ -225,7 +225,7 @@ async def test_successful_commit_ack_failure_cannot_downgrade(base_payload, huma
 
         def settle(self, namespace, event_id, owner_id, attempt, **fields):
             result = super().settle(namespace, event_id, owner_id, attempt, **fields)
-            if not self.failed_ack and fields.get("status") == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value:
+            if not self.failed_ack and fields.get("status") == WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value:
                 self.failed_ack = True
                 raise TimeoutError("commit acknowledged by store but not caller")
             return result
@@ -240,7 +240,7 @@ async def test_successful_commit_ack_failure_cannot_downgrade(base_payload, huma
         await process_event(ChangeEvent(**base_payload), store, Assessor(), FakeCommerceGovClient())
 
     persisted = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, base_payload["event_id"])
-    assert persisted["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
+    assert persisted["status"] == WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value
     assert persisted["reason"] != "Authority assessment failed"
 
 
@@ -249,7 +249,7 @@ async def test_post_settlement_read_failure_cannot_downgrade(base_payload, human
     class ReadFailingStore(InMemoryRunStore):
         def get(self, namespace, event_id):
             run = super().get(namespace, event_id)
-            if run and run["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value:
+            if run and run["status"] == WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value:
                 raise OSError("response read failed")
             return run
 
@@ -263,7 +263,7 @@ async def test_post_settlement_read_failure_cannot_downgrade(base_payload, human
         await process_event(ChangeEvent(**base_payload), store, Assessor(), FakeCommerceGovClient())
 
     persisted = InMemoryRunStore.get(store, PipelineNamespace.AUTHORITY_ASSESSMENT.value, base_payload["event_id"])
-    assert persisted["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
+    assert persisted["status"] == WorkflowStatus.HUMAN_AUTHORITY_REQUIRED.value
 
 
 @run_async_test

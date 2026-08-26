@@ -136,7 +136,7 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
     store.upsert_attention(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, attention_key, _compute_attention_update)
 
 
-    status = WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY if assessment.classification in [
+    status = WorkflowStatus.HUMAN_AUTHORITY_REQUIRED if assessment.classification in [
         IntelligenceClassification.ACTION_REQUIRED,
         IntelligenceClassification.AUTHORITY_AT_RISK,
         IntelligenceClassification.REVIEW_REQUIRED

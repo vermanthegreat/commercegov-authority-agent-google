@@ -16,7 +16,7 @@ def auth_settings(monkeypatch):
 def authenticated_app(auth_settings):
     assessment = AuthorityAssessment(
         change_id="chg_test",
-        classification=Classification.AUTONOMOUSLY_CONTINUE,
+        classification=Classification.READY_FOR_GOVERNED_EXECUTION,
         risk_level=RiskLevel.low,
         reason="Looks safe",
         recommended_next_action=RecommendedNextAction.CONTINUE
@@ -69,7 +69,7 @@ def test_authenticated_valid_request_creates_one_logical_run(authenticated_app):
     data = response.json()
     assert data["event_id"] == "evt_create"
     assert data["shop_id"] == "shop_auth"
-    assert data["status"] == WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value
+    assert data["status"] == WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value
     assert "proposal_id" in data
     
     # Exactly one run created
@@ -164,7 +164,7 @@ def test_create_run_cannot_approve_or_apply(authenticated_app):
     
     response = client.post("/runs", json=get_payload(), headers=get_auth_headers())
     assert response.status_code == 200
-    assert response.json()["status"] == WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value
+    assert response.json()["status"] == WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value
     
     # It creates a proposal, doesn't approve it.
     assert cg_client.last_proposal_id is not None
@@ -225,8 +225,8 @@ def test_firestore_and_in_memory_stores_preserve_equivalent_semantics(monkeypatc
     assert settle_im["reason"] == settle_fs["reason"] == "failed"
 
     # Attempt to settle again
-    settle_im2 = im_store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_im["attempt"], status=WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value, reason="changed")
-    settle_fs2 = fs_store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_fs["attempt"], status=WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value, reason="changed")
+    settle_im2 = im_store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_im["attempt"], status=WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value, reason="changed")
+    settle_fs2 = fs_store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-1", run_fs["attempt"], status=WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value, reason="changed")
 
     assert settle_im2["status"] == settle_fs2["status"] == WorkflowStatus.FAILED.value
     assert settle_im2["reason"] == settle_fs2["reason"] == "failed"

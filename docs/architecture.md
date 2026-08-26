@@ -67,7 +67,7 @@ flowchart TD
 **Important Boundaries & Trust Rules:**
 - **The AI reasons about operations. It does not get to redefine production authority.**
 - **The agent does not own production authority.** Gemini recommends an assessment only.
-- Python enforces constraints. For example, if a change requires human review per policy, it forces `WAITING_FOR_HUMAN_AUTHORITY`, disregarding unsafe autonomous classifications.
+- Python enforces constraints. For example, if a change requires human review per policy, it forces `HUMAN_AUTHORITY_REQUIRED`, disregarding unsafe autonomous classifications.
 - **Assessment ≠ Production Approval.** The LLM assessing an event is not the same as the final authoritative human or downstream approval.
 - **Applied ≠ Verified.** Execution is handled by CommerceGov. Taskmaster does not apply changes or verify production state.
 - For one `event_id`, a terminal persisted checkpoint is returned on replay without a second model call (preventing duplicate AI charges or hallucination loops).

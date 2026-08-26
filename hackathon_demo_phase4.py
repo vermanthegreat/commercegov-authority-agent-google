@@ -19,15 +19,41 @@ class DeterministicFakeIntelligenceAssessor(IntelligenceAssessor):
 
         val = event["proposed_value"].lower()
         
-        if len(history) >= 1:
+        # Evaluate history semantically rather than just checking length
+        has_unresolved_high_risk = False
+        has_resolved_or_unrelated = False
+        
+        for h in history:
+            # Look at structured fields like classification or resolution status
+            c = h.get("classification")
+            # Determine if this history entry is an unresolved high-risk concern
+            # In a real app we might look at 'status' == 'WAITING_FOR_HUMAN_AUTHORITY'
+            if c in ["ACTION_REQUIRED", "AUTHORITY_AT_RISK"] and h.get("status") != "RESOLVED":
+                has_unresolved_high_risk = True
+            else:
+                has_resolved_or_unrelated = True
+
+        if has_unresolved_high_risk:
             return AuthorityIntelligenceAssessmentV1(
                 classification=IntelligenceClassification.ACTION_REQUIRED,
-                summary="History dictates action",
-                reason="Event is actionable because history exists.",
+                summary="Escalating due to unresolved prior high risk",
+                reason="Event is actionable because history shows unresolved prior authority conflict.",
                 evidence_refs=[h["event_id"] for h in history],
                 affected_scope="Product Title",
                 recommended_operator_action="REVIEW_AND_APPROVE"
             )
+
+        if has_resolved_or_unrelated and not has_unresolved_high_risk and len(history) > 0:
+            # History exists but it's resolved or lower-risk
+            if "drift" in val:
+                return AuthorityIntelligenceAssessmentV1(
+                    classification=IntelligenceClassification.AUTHORITY_AT_RISK,
+                    summary="Evidence drift detected (prior history resolved)",
+                    reason="Correlated event indicates drift, but previous concerns were resolved.",
+                    evidence_refs=[h["event_id"] for h in history],
+                    affected_scope="Product Title",
+                    recommended_operator_action="INVESTIGATE_RISK"
+                )
 
         if "harmless" in val:
             return AuthorityIntelligenceAssessmentV1(

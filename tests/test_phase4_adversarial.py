@@ -441,3 +441,50 @@ async def test_equal_severity_order_independent():
     att2["evidence_refs"].sort()
 
     assert att1 == att2
+
+@pytest.mark.asyncio
+async def test_deterministic_assessor_history_content_swap():
+    from hackathon_demo_phase4 import DeterministicFakeIntelligenceAssessor
+    
+    assessor = DeterministicFakeIntelligenceAssessor()
+    
+    # IDENTICAL canonical current event
+    current_event = make_event("evt_curr", "tenant-1", "shop-1", "t1", "c1")
+    current_event.proposed_value = "drift detected"
+    event_dict = current_event.model_dump()
+    
+    # Both histories non-empty, but structured differently
+    history_high_risk = [{
+        "event_id": "hist_1",
+        "classification": "ACTION_REQUIRED",
+        "status": "WAITING_FOR_HUMAN_AUTHORITY" # unresolved high risk
+    }]
+    
+    history_low_risk = [{
+        "event_id": "hist_2",
+        "classification": "ACTION_REQUIRED",
+        "status": "RESOLVED" # resolved
+    }]
+    
+    # Run Scenario A (high risk history)
+    result_scenario_A = await assessor.assess(event_dict, history_high_risk)
+    
+    # Run Scenario B (low risk history)
+    result_scenario_B = await assessor.assess(event_dict, history_low_risk)
+    
+    assert result_scenario_A.classification == IntelligenceClassification.ACTION_REQUIRED
+    assert result_scenario_B.classification == IntelligenceClassification.AUTHORITY_AT_RISK
+    
+    # They must differ
+    assert result_scenario_A != result_scenario_B
+    
+    # Now SWAP the histories into new wrapper/scenario execution
+    # Scenario C gets B's history
+    result_scenario_C = await assessor.assess(event_dict, history_low_risk)
+    # Scenario D gets A's history
+    result_scenario_D = await assessor.assess(event_dict, history_high_risk)
+    
+    # Result follows HISTORY CONTENT, not the wrapper/scenario order
+    assert result_scenario_C == result_scenario_B
+    assert result_scenario_D == result_scenario_A
+

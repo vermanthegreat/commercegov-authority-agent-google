@@ -213,7 +213,7 @@ async def post_change(request: Request) -> dict[str, Any]:
 
 def _run_read_projection(run: dict[str, Any]) -> dict[str, Any]:
     # Legacy records remain explicitly unbound. Never infer or manufacture tenancy.
-    return run | {"shop_id": run.get("shop_id")}
+    return run | {"shop_id": run.get("shop_id"), "authority_boundary": "PROPOSE_ONLY", "handoff_reference": run.get("proposal_id"), "handoff_status": "HANDED_OFF" if run.get("proposal_id") else "NONE"}
 
 
 @router.post("/runs")
@@ -253,3 +253,5 @@ async def get_run(request: Request, event_id: str) -> dict[str, Any]:
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return _run_read_projection(run)
+
+

@@ -16,6 +16,9 @@ class RunStore(Protocol):
     def release_claim(self, event_id: str, owner_id: str, attempt: int) -> dict[str, Any]: ...
     def list_events(self, shop_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
     def get_stats(self) -> dict[str, int]: ...
+    def upsert_attention(self, attention_key: str, data: dict[str, Any]) -> dict[str, Any]: ...
+    def get_attention(self, attention_key: str) -> dict[str, Any] | None: ...
+    def get_history(self, shop_id: str, target_id: str, limit: int = 10) -> list[dict[str, Any]]: ...
 
 
 def _now() -> str:
@@ -25,9 +28,36 @@ def _now() -> str:
 class InMemoryRunStore:
     def __init__(self, *, monotonic_clock: Callable[[], float] = monotonic) -> None:
         self.runs: dict[str, dict[str, Any]] = {}
+        self.attentions: dict[str, dict[str, Any]] = {}
         self._lock = RLock()
         self._monotonic_clock = monotonic_clock
         self._claim_clocks: dict[str, float] = {}
+
+    def upsert_attention(self, attention_key: str, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            now = _now()
+            if attention_key in self.attentions:
+                self.attentions[attention_key].update(data)
+                self.attentions[attention_key]["updated_at"] = now
+            else:
+                self.attentions[attention_key] = deepcopy(data)
+                self.attentions[attention_key]["created_at"] = now
+                self.attentions[attention_key]["updated_at"] = now
+            return deepcopy(self.attentions[attention_key])
+
+    def get_attention(self, attention_key: str) -> dict[str, Any] | None:
+        with self._lock:
+            item = self.attentions.get(attention_key)
+            return deepcopy(item) if item else None
+
+    def get_history(self, shop_id: str, target_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        with self._lock:
+            matching = [
+                run for run in self.runs.values() 
+                if run.get("shop_id") == shop_id and run.get("target_id") == target_id
+            ]
+            matching.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+            return [deepcopy(r) for r in matching[:limit]]
 
     def get(self, event_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -166,13 +196,52 @@ class InMemoryRunStore:
 
 class FirestoreRunStore:
     COLLECTION = "authority_agent_runs"
+    ATTENTION_COLLECTION = "operator_attention"
 
     def __init__(self, project: str, database: str) -> None:
         from google.cloud import firestore
-        self._client = firestore.Client(project=project, database=database)
+        self._client = firestore.Client(project=project, database=database)     
 
     def _doc(self, event_id: str):
         return self._client.collection(self.COLLECTION).document(event_id)
+
+    def upsert_attention(self, attention_key: str, data: dict[str, Any]) -> dict[str, Any]:
+        from google.cloud import firestore
+        doc_ref = self._client.collection(self.ATTENTION_COLLECTION).document(attention_key)
+
+        @firestore.transactional
+        def _transactional_upsert(transaction):
+            snapshot = doc_ref.get(transaction=transaction)
+            if snapshot.exists:
+                updated = deepcopy(data)
+                updated["updated_at"] = firestore.SERVER_TIMESTAMP
+                transaction.update(doc_ref, updated)
+                return snapshot.to_dict() | updated
+            else:
+                created = deepcopy(data)
+                created["created_at"] = firestore.SERVER_TIMESTAMP
+                created["updated_at"] = firestore.SERVER_TIMESTAMP
+                transaction.create(doc_ref, created)
+                return created
+
+        return _transactional_upsert(self._client.transaction())
+
+    def get_attention(self, attention_key: str) -> dict[str, Any] | None:
+        doc_ref = self._client.collection(self.ATTENTION_COLLECTION).document(attention_key)
+        snapshot = doc_ref.get()
+        return snapshot.to_dict() if snapshot.exists else None
+
+    def get_history(self, shop_id: str, target_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        # Requires composite index in production, but okay for mock/testing
+        query = self._client.collection(self.COLLECTION).where(
+            filter=FieldFilter("shop_id", "==", shop_id)
+        ).where(
+            filter=FieldFilter("target_id", "==", target_id)
+        )
+        matching = (doc.to_dict() for doc in query.stream())
+        sorted_matching = sorted(matching, key=lambda r: str(r.get("created_at", "")), reverse=True)
+        return sorted_matching[:limit]
 
     def get(self, event_id: str) -> dict[str, Any] | None:
         snapshot = self._doc(event_id).get()

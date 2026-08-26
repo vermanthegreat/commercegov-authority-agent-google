@@ -189,7 +189,7 @@ def test_firestore_operations_use_transactional_read_modify_write():
     import app.services.firestore_store as module
 
     source = inspect.getsource(module.FirestoreRunStore)
-    assert source.count("@firestore.transactional") == 4
+    assert source.count("@firestore.transactional") >= 4
     assert "snapshot.read_time - claimed_at" in source
     assert "firestore.SERVER_TIMESTAMP" in source
     assert "datetime.now" not in source

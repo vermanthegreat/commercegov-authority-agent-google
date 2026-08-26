@@ -24,8 +24,42 @@ CommerceGovProposalV1
 Terminal / Replay-Safe State
 ```
 
+## Phase 3: Authority Intelligence
+
+Phase 3 introduces the Authority Intelligence layer which reasons across multiple events to determine when operator attention is required. 
+
+**Conceptual Architecture:**
+
+```text
+CommerceGov / operational events
+        ↓
+Taskmaster
+        ↓
+Authority Intelligence
+        ↓
+Gemini correlation/relevance reasoning
+        ↓
+Python deterministic enforcement
+        ↓
+Firestore operational memory
+        ↓
+NO_ACTION_REQUIRED
+        OR
+operator attention/task
+        ↓
+CommerceGov / human workflow
+```
+
+**Core Components:**
+- **Taskmaster**: runtime
+- **Authority Intelligence**: reasoning layer
+- **Gemini**: reasoning engine
+- **Firestore**: durable operational memory
+- **CommerceGov**: production authority
+
 **Important Boundaries & Trust Rules:**
-- **The agent does not own production authority.** Gemini recommends an assessment only. 
+- **The AI reasons about operations. It does not get to redefine production authority.**
+- **The agent does not own production authority.** Gemini recommends an assessment only.
 - Python enforces constraints. For example, if a change requires human review per policy, it forces `WAITING_FOR_HUMAN_AUTHORITY`, disregarding unsafe autonomous classifications.
 - **Assessment ≠ Production Approval.** The LLM assessing an event is not the same as the final authoritative human or downstream approval.
 - **Applied ≠ Verified.** Execution is handled by CommerceGov. Taskmaster does not apply changes or verify production state.

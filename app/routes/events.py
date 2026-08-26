@@ -208,7 +208,9 @@ async def post_change(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Invalid governed change event")
     try:
         return await process_event(event, request.app.state.run_store, request.app.state.assessor, request.app.state.commercegov_client)
-    except RuntimeError:
+    except RuntimeError as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Authority assessment failed: {e}")
         raise HTTPException(status_code=502, detail="Authority assessment failed")
 
 def _run_read_projection(run: dict[str, Any]) -> dict[str, Any]:
@@ -225,7 +227,9 @@ async def create_run(
     try:
         run = await process_event(event, request.app.state.run_store, request.app.state.assessor, request.app.state.commercegov_client)
         return _run_read_projection(run)
-    except RuntimeError:
+    except RuntimeError as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Authority assessment failed: {e}")
         raise HTTPException(status_code=502, detail="Authority assessment failed")
 
 @router.get("/runs")
@@ -253,5 +257,6 @@ async def get_run(request: Request, event_id: str) -> dict[str, Any]:
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return _run_read_projection(run)
+
 
 

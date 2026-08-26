@@ -89,7 +89,7 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
         settled = store.settle(
             PipelineNamespace.AUTHORITY_INTELLIGENCE.value,
             event.event_id, owner_id, attempt,
-            status=WorkflowStatus.SUPPRESSED.value,
+            status=WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value,
             intelligence_classification=assessment.classification.value,
             summary=assessment.summary,
             reason=assessment.reason,
@@ -140,7 +140,7 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
         IntelligenceClassification.ACTION_REQUIRED,
         IntelligenceClassification.AUTHORITY_AT_RISK,
         IntelligenceClassification.REVIEW_REQUIRED
-    ] else WorkflowStatus.SUPPRESSED
+    ] else WorkflowStatus.READY_FOR_GOVERNED_EXECUTION
 
     settled = store.settle(
         PipelineNamespace.AUTHORITY_INTELLIGENCE.value, event.event_id, owner_id, attempt,

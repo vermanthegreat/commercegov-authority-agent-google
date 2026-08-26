@@ -127,8 +127,6 @@ class WorkflowStatus(str, Enum):
     BLOCKED = "BLOCKED"
     FAILED = "FAILED"
     ASSESSMENT_OUTCOME_UNKNOWN = "ASSESSMENT_OUTCOME_UNKNOWN"
-    SUPPRESSED = "SUPPRESSED"
-
 
 TERMINAL_STATUSES = {
     WorkflowStatus.HUMAN_AUTHORITY_REQUIRED,
@@ -136,5 +134,6 @@ TERMINAL_STATUSES = {
     WorkflowStatus.BLOCKED,
     WorkflowStatus.FAILED,
     WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN,
-    WorkflowStatus.SUPPRESSED,
+
 }
+

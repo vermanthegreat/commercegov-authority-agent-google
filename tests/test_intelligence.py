@@ -40,7 +40,7 @@ async def test_no_action_required_creates_no_task(intelligence_event_payload, st
     
     run = await process_operational_event(intelligence_event_payload, store, assessor)
     
-    assert run["status"] == WorkflowStatus.SUPPRESSED.value
+    assert run["status"] == WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value
     assert run["intelligence_classification"] == "NO_ACTION_REQUIRED"
     assert "attention_key" not in run
 
@@ -55,7 +55,7 @@ async def test_informational_creates_attention_but_not_waiting_status(intelligen
     
     run = await process_operational_event(intelligence_event_payload, store, assessor)
     
-    assert run["status"] == WorkflowStatus.SUPPRESSED.value
+    assert run["status"] == WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value
     assert run["intelligence_classification"] == "INFORMATIONAL"
     
     attention_key = run["attention_key"]
@@ -195,7 +195,7 @@ async def test_prose_authority_injection_is_blocked(intelligence_event_payload, 
     run = await process_operational_event(intelligence_event_payload, store, assessor)
     
     # It must not grant authority or produce a waiting state
-    assert run["status"] == WorkflowStatus.SUPPRESSED.value
+    assert run["status"] == WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value
     # No proposal ID should be created by intelligence
     assert "proposal_id" not in run
 
@@ -386,5 +386,5 @@ async def test_history_dependent_semantic_correlation(intelligence_event_payload
     # Run without history (empty store)
     empty_store = InMemoryRunStore()
     run3 = await process_operational_event(canonical_current_event, empty_store, assessor2)
-    assert run3["status"] == WorkflowStatus.SUPPRESSED.value
+    assert run3["status"] == WorkflowStatus.READY_FOR_GOVERNED_EXECUTION.value
     assert run3["intelligence_classification"] == "NO_ACTION_REQUIRED"

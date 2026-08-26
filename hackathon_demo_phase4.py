@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import logging
 
 from app.models import ChangeEvent, AuthorityIntelligenceAssessmentV1, IntelligenceClassification, PipelineNamespace
@@ -19,38 +20,44 @@ class DeterministicFakeIntelligenceAssessor(IntelligenceAssessor):
 
         val = event["proposed_value"].lower()
         
-        # Evaluate history semantically rather than just checking length
+        # Tenant, shop, and namespace are bounded by the pipeline before history
+        # reaches the assessor. Bind the remaining semantic relationship to the
+        # current target and concern before considering risk or resolution state.
         has_unresolved_high_risk = False
-        has_resolved_or_unrelated = False
+        has_related_resolved_or_lower_risk = False
+        related_history = []
         
         for h in history:
-            # Look at structured fields like classification or resolution status
+            if (
+                h.get("target_id") != event.get("target_id")
+                or h.get("mutation_class") != event.get("mutation_class")
+            ):
+                continue
+
+            related_history.append(h)
             c = h.get("classification")
-            # Determine if this history entry is an unresolved high-risk concern
-            # In a real app we might look at 'status' == 'WAITING_FOR_HUMAN_AUTHORITY'
             if c in ["ACTION_REQUIRED", "AUTHORITY_AT_RISK"] and h.get("status") != "RESOLVED":
                 has_unresolved_high_risk = True
             else:
-                has_resolved_or_unrelated = True
+                has_related_resolved_or_lower_risk = True
 
         if has_unresolved_high_risk:
             return AuthorityIntelligenceAssessmentV1(
                 classification=IntelligenceClassification.ACTION_REQUIRED,
                 summary="Escalating due to unresolved prior high risk",
                 reason="Event is actionable because history shows unresolved prior authority conflict.",
-                evidence_refs=[h["event_id"] for h in history],
+                evidence_refs=[h["event_id"] for h in related_history],
                 affected_scope="Product Title",
                 recommended_operator_action="REVIEW_AND_APPROVE"
             )
 
-        if has_resolved_or_unrelated and not has_unresolved_high_risk and len(history) > 0:
-            # History exists but it's resolved or lower-risk
+        if has_related_resolved_or_lower_risk and not has_unresolved_high_risk:
             if "drift" in val:
                 return AuthorityIntelligenceAssessmentV1(
                     classification=IntelligenceClassification.AUTHORITY_AT_RISK,
                     summary="Evidence drift detected (prior history resolved)",
                     reason="Correlated event indicates drift, but previous concerns were resolved.",
-                    evidence_refs=[h["event_id"] for h in history],
+                    evidence_refs=[h["event_id"] for h in related_history],
                     affected_scope="Product Title",
                     recommended_operator_action="INVESTIGATE_RISK"
                 )
@@ -76,7 +83,7 @@ class DeterministicFakeIntelligenceAssessor(IntelligenceAssessor):
                 classification=IntelligenceClassification.AUTHORITY_AT_RISK,    
                 summary="Evidence drift detected",
                 reason="Correlated event indicates the underlying production state has drifted.",
-                evidence_refs=[h["event_id"] for h in history] if history else [],
+                evidence_refs=[h["event_id"] for h in related_history],
                 affected_scope="Product Title",
                 recommended_operator_action="INVESTIGATE_RISK"
             )
@@ -141,6 +148,55 @@ async def print_run(name: str, event: ChangeEvent, store: InMemoryRunStore, asse
         print("NOISE SUPPRESSED - No task created")
 
 
+async def print_semantic_history_comparison(assessor: IntelligenceAssessor):
+    event = make_event("evt-107", "drift condition")
+    event.mutation_class = "product.vendor"
+    current_event_a = event.model_dump()
+    current_event_b = event.model_dump()
+
+    canonical_a = json.dumps(current_event_a, sort_keys=True, separators=(",", ":"))
+    canonical_b = json.dumps(current_event_b, sort_keys=True, separators=(",", ":"))
+
+    shared_boundary = {
+        "agency_id": event.agency_id,
+        "shop_id": event.shop_id,
+        "namespace": PipelineNamespace.AUTHORITY_INTELLIGENCE.value,
+    }
+    related_unresolved_history = [{
+        **shared_boundary,
+        "event_id": "evt-107-related-history",
+        "classification": IntelligenceClassification.ACTION_REQUIRED.value,
+        "status": "WAITING_FOR_HUMAN_AUTHORITY",
+        "target_id": event.target_id,
+        "mutation_class": event.mutation_class,
+    }]
+    unrelated_history = [{
+        **shared_boundary,
+        "event_id": "evt-107-unrelated-history",
+        "classification": IntelligenceClassification.ACTION_REQUIRED.value,
+        "status": "WAITING_FOR_HUMAN_AUTHORITY",
+        "target_id": "gid://shopify/Product/998877",
+        "mutation_class": "product.price",
+    }]
+
+    related_assessment = await assessor.assess(current_event_a, related_unresolved_history)
+    unrelated_assessment = await assessor.assess(current_event_b, unrelated_history)
+
+    print("\n--- SCENARIO: 7. STRUCTURED HISTORY SEMANTIC CORRELATION ---")
+    print(f"Canonical current events identical: {canonical_a == canonical_b}")
+    print(f"Related history records: {len(related_unresolved_history)}")
+    print(f"Unrelated history records: {len(unrelated_history)}")
+    print("\n[RELATED UNRESOLVED HISTORY]")
+    print(f"Classification: {related_assessment.classification.value}")
+    print(f"Recommended Action: {related_assessment.recommended_operator_action.value}")
+    print(f"Reason: {related_assessment.reason}")
+    print("\n[UNRELATED NON-EMPTY HISTORY]")
+    print(f"Classification: {unrelated_assessment.classification.value}")
+    print(f"Recommended Action: {unrelated_assessment.recommended_operator_action.value}")
+    print(f"Reason: {unrelated_assessment.reason}")
+    print(f"Structured assessments differ: {related_assessment != unrelated_assessment}")
+
+
 async def run_hackathon_demo(live: bool):
     print("==================================================")
     print(f"AUTHORITY INTELLIGENCE PHASE 4 DEMO (LIVE GEMINI: {live})")
@@ -191,22 +247,8 @@ async def run_hackathon_demo(live: bool):
     evt6.mutation_class = "product.price"
     await print_run("6. SAME TARGET, DIFFERENT CONCERN", evt6, store, assessor) 
 
-    # 7. HISTORY-DEPENDENT SEMANTIC CORRELATION
-    # We use exactly the same event, but process it in two different histories
-    evt7 = make_event("evt-107", "drift condition")
-    evt7.mutation_class = "product.vendor"
-
-    # 7a. First, evaluate without history using an isolated empty store
-    isolated_store = InMemoryRunStore()
-    await print_run("7a. HISTORY-DEPENDENT (ISOLATED - NO HISTORY)", evt7, isolated_store, assessor)
-
-    # Now add some history to the main store on that same target/concern
-    evt7_history = make_event("evt-107-hist", "informational update")
-    evt7_history.mutation_class = "product.vendor"
-    await process_operational_event(evt7_history, store, assessor)
-
-    # 7b. Evaluate with history using the main store
-    await print_run("7b. HISTORY-DEPENDENT (CORRELATED - WITH HISTORY)", evt7, store, assessor)
+    # 7. SAME CURRENT EVENT WITH TWO NON-EMPTY STRUCTURED HISTORIES
+    await print_semantic_history_comparison(assessor)
 
     print("\n==================================================")
     print("DEMO COMPLETE")

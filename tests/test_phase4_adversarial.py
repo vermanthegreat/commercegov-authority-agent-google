@@ -175,6 +175,8 @@ async def test_substantive_gemini_history():
     assert hist_event["reason"] == "Rsn"
     assert hist_event["affected_scope"] == "Scope"
     assert hist_event["evidence_refs"] == ["ref1"]
+    assert hist_event["target_id"] == event.target_id
+    assert hist_event["mutation_class"] == event.mutation_class
 
 def test_firestore_contention_forces_retry_and_preserves_high_severity(monkeypatch):
     import google.cloud
@@ -444,6 +446,7 @@ async def test_equal_severity_order_independent():
 
 @pytest.mark.asyncio
 async def test_deterministic_assessor_history_content_swap():
+    import json
     from hackathon_demo_phase4 import DeterministicFakeIntelligenceAssessor
     
     assessor = DeterministicFakeIntelligenceAssessor()
@@ -451,26 +454,73 @@ async def test_deterministic_assessor_history_content_swap():
     # IDENTICAL canonical current event
     current_event = make_event("evt_curr", "tenant-1", "shop-1", "t1", "c1")
     current_event.proposed_value = "drift detected"
-    event_dict = current_event.model_dump()
+    event_dict_a = current_event.model_dump()
+    event_dict_b = current_event.model_dump()
+
+    assert json.dumps(event_dict_a, sort_keys=True, separators=(",", ":")) == json.dumps(
+        event_dict_b, sort_keys=True, separators=(",", ":")
+    )
+
+    shared_boundary = {
+        "agency_id": current_event.agency_id,
+        "shop_id": current_event.shop_id,
+        "namespace": PipelineNamespace.AUTHORITY_INTELLIGENCE.value,
+    }
     
     # Both histories non-empty, but structured differently
     history_high_risk = [{
+        **shared_boundary,
         "event_id": "hist_1",
         "classification": "ACTION_REQUIRED",
-        "status": "WAITING_FOR_HUMAN_AUTHORITY" # unresolved high risk
+        "status": "WAITING_FOR_HUMAN_AUTHORITY",
+        "target_id": current_event.target_id,
+        "mutation_class": current_event.mutation_class,
     }]
     
-    history_low_risk = [{
+    history_unrelated = [{
+        **shared_boundary,
         "event_id": "hist_2",
         "classification": "ACTION_REQUIRED",
-        "status": "RESOLVED" # resolved
+        "status": "WAITING_FOR_HUMAN_AUTHORITY",
+        "target_id": "other-target",
+        "mutation_class": "other-concern",
     }]
+
+    history_resolved = [{
+        **shared_boundary,
+        "event_id": "hist_3",
+        "classification": "ACTION_REQUIRED",
+        "status": "RESOLVED",
+        "target_id": current_event.target_id,
+        "mutation_class": current_event.mutation_class,
+    }]
+
+    two_unrelated_histories = [
+        history_unrelated[0],
+        {
+            **shared_boundary,
+            "event_id": "hist_4",
+            "classification": "AUTHORITY_AT_RISK",
+            "status": "WAITING_FOR_HUMAN_AUTHORITY",
+            "target_id": "another-target",
+            "mutation_class": current_event.mutation_class,
+        },
+    ]
+
+    assert history_high_risk
+    assert history_unrelated
+
+    async def wrapper_1(history):
+        return await assessor.assess(event_dict_a, history)
+
+    async def wrapper_2(history):
+        return await assessor.assess(event_dict_b, history)
     
     # Run Scenario A (high risk history)
-    result_scenario_A = await assessor.assess(event_dict, history_high_risk)
+    result_scenario_A = await wrapper_1(history_high_risk)
     
     # Run Scenario B (low risk history)
-    result_scenario_B = await assessor.assess(event_dict, history_low_risk)
+    result_scenario_B = await wrapper_2(history_unrelated)
     
     assert result_scenario_A.classification == IntelligenceClassification.ACTION_REQUIRED
     assert result_scenario_B.classification == IntelligenceClassification.AUTHORITY_AT_RISK
@@ -478,11 +528,17 @@ async def test_deterministic_assessor_history_content_swap():
     # They must differ
     assert result_scenario_A != result_scenario_B
     
-    # Now SWAP the histories into new wrapper/scenario execution
-    # Scenario C gets B's history
-    result_scenario_C = await assessor.assess(event_dict, history_low_risk)
-    # Scenario D gets A's history
-    result_scenario_D = await assessor.assess(event_dict, history_high_risk)
+    result_resolved = await assessor.assess(event_dict_a, history_resolved)
+    result_two_unrelated = await assessor.assess(event_dict_a, two_unrelated_histories)
+
+    assert result_resolved.classification == IntelligenceClassification.AUTHORITY_AT_RISK
+    assert result_resolved != result_scenario_A
+    assert result_two_unrelated.classification == IntelligenceClassification.AUTHORITY_AT_RISK
+
+    # Swap only histories between wrappers. Output must continue to follow the
+    # structured history content, not wrapper identity or execution order.
+    result_scenario_C = await wrapper_1(history_unrelated)
+    result_scenario_D = await wrapper_2(history_high_risk)
     
     # Result follows HISTORY CONTENT, not the wrapper/scenario order
     assert result_scenario_C == result_scenario_B

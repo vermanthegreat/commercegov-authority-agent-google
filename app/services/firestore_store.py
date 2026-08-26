@@ -32,14 +32,16 @@ class InMemoryRunStore:
         self._monotonic_clock = monotonic_clock
         self._claim_clocks: dict[str, float] = {}
 
-    def upsert_attention(self, attention_key: str, data: dict[str, Any]) -> dict[str, Any]:
+    def upsert_attention(self, attention_key: str, update_fn: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
         with self._lock:
             now = _now()
-            if attention_key in self.attentions:
-                self.attentions[attention_key].update(data)
+            existing = self.attentions.get(attention_key)
+            new_data = update_fn(deepcopy(existing) if existing else None)
+            if existing:
+                self.attentions[attention_key].update(new_data)
                 self.attentions[attention_key]["updated_at"] = now
             else:
-                self.attentions[attention_key] = deepcopy(data)
+                self.attentions[attention_key] = deepcopy(new_data)
                 self.attentions[attention_key]["created_at"] = now
                 self.attentions[attention_key]["updated_at"] = now
             return deepcopy(self.attentions[attention_key])
@@ -168,7 +170,7 @@ class InMemoryRunStore:
     def list_events(self, namespace: str, shop_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         with self._lock:
             # Filter before pagination. Missing legacy bindings never match.
-            matching_runs = (run for run in self.runs.values() if run.get("shop_id") == shop_id)
+            matching_runs = (run for run in self.runs.values() if run.get("shop_id") == shop_id and run.get("namespace") == namespace)
             sorted_runs = sorted(matching_runs, key=lambda r: r.get("created_at", ""), reverse=True)
             return [deepcopy(r) for r in sorted_runs[offset:offset+limit]]
 
@@ -210,20 +212,22 @@ class FirestoreRunStore:
     def _doc(self, namespace: str, event_id: str):
         return self._client.collection(self.COLLECTION).document(f"{namespace}:{event_id}")
 
-    def upsert_attention(self, attention_key: str, data: dict[str, Any]) -> dict[str, Any]:
+    def upsert_attention(self, attention_key: str, update_fn: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
         from google.cloud import firestore
         doc_ref = self._client.collection(self.ATTENTION_COLLECTION).document(attention_key)
 
         @firestore.transactional
         def _transactional_upsert(transaction):
             snapshot = doc_ref.get(transaction=transaction)
+            existing = snapshot.to_dict() if snapshot.exists else None
+            new_data = update_fn(existing)
             if snapshot.exists:
-                updated = deepcopy(data)
+                updated = deepcopy(new_data)
                 updated["updated_at"] = firestore.SERVER_TIMESTAMP
                 transaction.update(doc_ref, updated)
                 return snapshot.to_dict() | updated
             else:
-                created = deepcopy(data)
+                created = deepcopy(new_data)
                 created["created_at"] = firestore.SERVER_TIMESTAMP
                 created["updated_at"] = firestore.SERVER_TIMESTAMP
                 transaction.create(doc_ref, created)
@@ -400,16 +404,22 @@ class FirestoreRunStore:
         # on the already tenant-scoped result set and need no composite index.
         query = self._client.collection(self.COLLECTION).where(
             filter=FieldFilter("shop_id", "==", shop_id)
+        ).where(
+            filter=FieldFilter("namespace", "==", namespace)
         )
         matching_runs = (doc.to_dict() for doc in query.stream())
         sorted_runs = sorted(matching_runs, key=lambda run: str(run.get("created_at", "")), reverse=True)
         return sorted_runs[offset:offset+limit]
 
-    def get_stats(self) -> dict[str, int]:
+    def get_stats(self, namespace: str) -> dict[str, int]:
+        from google.cloud.firestore_v1.base_query import FieldFilter
         # Using aggregation queries for stats where possible
         # Or retrieving all documents in a very unoptimized way for the hackathon
         # Since this is a hackathon, we might want to do it simply
-        docs = [doc.to_dict() for doc in self._client.collection(self._collection).stream()]
+        query = self._client.collection(self.COLLECTION).where(
+            filter=FieldFilter("namespace", "==", namespace)
+        )
+        docs = [doc.to_dict() for doc in query.stream()]
         total = len(docs)
         processing = sum(1 for r in docs if r.get("status") == WorkflowStatus.PROCESSING.value)
         assessing = sum(1 for r in docs if r.get("status") == WorkflowStatus.ASSESSING.value)

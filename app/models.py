@@ -12,6 +12,7 @@ class ChangeEvent(BaseModel):
 
     event_id: str = Field(min_length=1)
     change_id: str = Field(min_length=1)
+    agency_id: str = Field(default="default-agency", min_length=1)
     shop_id: str = Field(min_length=1)
     target_type: str = Field(min_length=1)
     target_id: str = Field(min_length=1)

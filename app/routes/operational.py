@@ -28,12 +28,26 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
     attempt = run["attempt"]
     store.begin_assessment(PipelineNamespace.AUTHORITY_INTELLIGENCE.value, event.event_id, owner_id, attempt)
 
-    import json; import hashlib; canonical = json.dumps({"tenant": event.shop_id, "shop": event.shop_id, "target": event.target_id, "type": event.target_type, "concern": event.mutation_class}, sort_keys=True, separators=(",",":")); attention_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    import json; import hashlib; canonical = json.dumps({"tenant": event.agency_id, "shop": event.shop_id, "target": event.target_id, "type": event.target_type, "concern": event.mutation_class}, sort_keys=True, separators=(",",":")); attention_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     try:
         history_runs = store.get_history(attention_key, limit=5)
     
-        # We only pass minimal history to avoid prompt bloat
-        history = [{"event_id": r.get("event_id"), "classification": r.get("intelligence_classification"), "created_at": r.get("created_at")} for r in history_runs if r.get("intelligence_classification")]
+        # Provide substantive but bounded history context
+        history = [
+            {
+                "event_id": r.get("event_id"), 
+                "classification": r.get("intelligence_classification"), 
+                "summary": r.get("summary"),
+                "reason": r.get("reason"),
+                "affected_scope": r.get("affected_scope"),
+                "target_id": r.get("target_id"),
+                "mutation_class": r.get("mutation_class", r.get("concern")),
+                "status": r.get("status"),
+                "evidence_refs": r.get("evidence_refs"),
+                "created_at": r.get("created_at")
+            } 
+            for r in history_runs if r.get("intelligence_classification")
+        ]
         
         assessment = await assessor.assess(event.model_dump(), history)
     except pydantic.ValidationError as exc:
@@ -68,7 +82,7 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
         )
         raise RuntimeError("Invalid intelligence classification")
 
-    import json; import hashlib; canonical = json.dumps({"tenant": event.shop_id, "shop": event.shop_id, "target": event.target_id, "type": event.target_type, "concern": event.mutation_class}, sort_keys=True, separators=(",",":")); attention_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    import json; import hashlib; canonical = json.dumps({"tenant": event.agency_id, "shop": event.shop_id, "target": event.target_id, "type": event.target_type, "concern": event.mutation_class}, sort_keys=True, separators=(",",":")); attention_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     
     if assessment.classification == IntelligenceClassification.NO_ACTION_REQUIRED:
         # Noise suppression
@@ -77,7 +91,10 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
             event.event_id, owner_id, attempt,
             status=WorkflowStatus.SUPPRESSED.value,
             intelligence_classification=assessment.classification.value,
-            reason=assessment.reason
+            summary=assessment.summary,
+            reason=assessment.reason,
+            affected_scope=assessment.affected_scope,
+            evidence_refs=assessment.evidence_refs
         )
         return settled
 
@@ -90,24 +107,25 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
         IntelligenceClassification.AUTHORITY_AT_RISK.value: 3,
         IntelligenceClassification.ACTION_REQUIRED.value: 4,
     }
-    
-    current_attention = store.get_attention(attention_key)
-    current_severity = -1
-    if current_attention:
-        current_severity = severity_order.get(current_attention.get("classification"), -1)
-    
-    new_severity = severity_order.get(assessment.classification.value, -1)
-    
-    attention_data = {
-        "classification": assessment.classification.value if new_severity >= current_severity else current_attention.get("classification"),
-        "summary": assessment.summary,
-        "reason": assessment.reason,
-        "evidence_refs": list(set(current_attention.get("evidence_refs", []) + assessment.evidence_refs)) if current_attention else assessment.evidence_refs,
-        "affected_scope": assessment.affected_scope,
-        "recommended_operator_action": assessment.recommended_operator_action if new_severity >= current_severity else current_attention.get("recommended_operator_action"),
-        "last_event_id": event.event_id
-    }
-    store.upsert_attention(attention_key, attention_data)
+
+    def _compute_attention_update(current_attention: dict[str, Any] | None) -> dict[str, Any]:
+        current_severity = -1
+        if current_attention:
+            current_severity = severity_order.get(current_attention.get("classification"), -1)
+        
+        new_severity = severity_order.get(assessment.classification.value, -1)
+        
+        return {
+            "classification": assessment.classification.value if new_severity >= current_severity else current_attention.get("classification"),
+            "summary": assessment.summary,
+            "reason": assessment.reason,
+            "evidence_refs": list(set(current_attention.get("evidence_refs", []) + assessment.evidence_refs)) if current_attention else assessment.evidence_refs,
+            "affected_scope": assessment.affected_scope,
+            "recommended_operator_action": assessment.recommended_operator_action if new_severity >= current_severity else current_attention.get("recommended_operator_action"),
+            "last_event_id": event.event_id
+        }
+
+    store.upsert_attention(attention_key, _compute_attention_update)
 
 
     status = WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY if assessment.classification in [
@@ -120,7 +138,10 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
         PipelineNamespace.AUTHORITY_INTELLIGENCE.value, event.event_id, owner_id, attempt,
         status=status.value,
         intelligence_classification=assessment.classification.value,
+        summary=assessment.summary,
         reason=assessment.reason,
+        affected_scope=assessment.affected_scope,
+        evidence_refs=assessment.evidence_refs,
         attention_key=attention_key
     )
     return settled

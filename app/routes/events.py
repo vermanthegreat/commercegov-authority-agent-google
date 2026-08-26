@@ -148,6 +148,7 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
             # safely retry the submission without re-running Gemini. We fail closed.
             try:
                 store.mark_assessment_unknown(
+                    PipelineNamespace.AUTHORITY_ASSESSMENT.value,
                     event.event_id,
                     owner_id,
                     attempt,
@@ -159,6 +160,7 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
         except CommerceGovDeterministicError as exc:
             try:
                 store.settle(
+                    PipelineNamespace.AUTHORITY_ASSESSMENT.value,
                     event.event_id,
                     owner_id,
                     attempt,
@@ -171,6 +173,7 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
         except Exception as exc:
             try:
                 store.mark_assessment_unknown(
+                    PipelineNamespace.AUTHORITY_ASSESSMENT.value,
                     event.event_id,
                     owner_id,
                     attempt,

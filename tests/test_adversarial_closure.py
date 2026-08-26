@@ -127,6 +127,59 @@ async def test_terminal_immutability_against_stale_worker(event, assessment, mon
         store.mark_assessment_unknown(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-a", 1, "A failed")
         
     run = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)
-    assert run["status"] == WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value
+    assert run["status"] == WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value       
     assert run["reason"] == "completed by B"
+
+
+@pytest.mark.asyncio
+async def test_commercegov_deterministic_proposal_failure_is_terminal(event, assessment):
+    store = InMemoryRunStore()
+    assessor = FakeAssessor(result=assessment)
+
+    from tests.conftest import FakeCommerceGovClient
+    from app.services.commercegov_client import CommerceGovDeterministicError
+
+    class FailingCGClient(FakeCommerceGovClient):
+        async def submit_proposal(self, proposal):
+            raise CommerceGovDeterministicError("Rejected by CommerceGov schema")
+
+    cg_client = FailingCGClient()
+
+    with pytest.raises(RuntimeError, match="CommerceGov rejected proposal"):
+        await process_event(event, store, assessor, cg_client)
+
+    run = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)
+    assert run["status"] == WorkflowStatus.FAILED.value
+    assert "Rejected by CommerceGov" in run["reason"]
+    assert "proposal_id" not in run
+
+    # Terminal replay prevents duplicate assessment
+    claim, _ = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b")
+    assert claim == ClaimResult.TERMINAL_REPLAY
+
+@pytest.mark.asyncio
+async def test_commercegov_transient_proposal_failure_is_terminal(event, assessment):
+    store = InMemoryRunStore()
+    assessor = FakeAssessor(result=assessment)
+
+    from tests.conftest import FakeCommerceGovClient
+    from app.services.commercegov_client import CommerceGovTransientError
+
+    class TransientFailingCGClient(FakeCommerceGovClient):
+        async def submit_proposal(self, proposal):
+            raise CommerceGovTransientError("Network timeout")
+
+    cg_client = TransientFailingCGClient()
+
+    with pytest.raises(RuntimeError, match="Failed to submit governed proposal"):
+        await process_event(event, store, assessor, cg_client)
+
+    run = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)
+    assert run["status"] == WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN.value
+    assert "Network timeout" in run["reason"]
+    assert "proposal_id" not in run
+
+    # Terminal replay prevents duplicate assessment
+    claim, _ = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b")
+    assert claim == ClaimResult.TERMINAL_REPLAY
 

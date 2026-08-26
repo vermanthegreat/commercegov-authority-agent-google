@@ -29,6 +29,8 @@ class ChangeEvent(BaseModel):
     @property
     def fingerprint(self) -> str:
         data = self.model_dump(exclude={"event_id"})
+        if data.get("agency_id") == "default-agency":
+            del data["agency_id"]
         canonical = json.dumps(data, sort_keys=True, separators=(',', ':'))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

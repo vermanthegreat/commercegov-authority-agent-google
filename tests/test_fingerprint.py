@@ -63,3 +63,21 @@ def test_event_id_is_intentionally_excluded(event_payload):
     changed = deepcopy(event_payload)
     changed["event_id"] = "evt_002"
     assert ChangeEvent(**event_payload).fingerprint == ChangeEvent(**changed).fingerprint
+
+def test_legacy_fingerprint_compatibility(event_payload):
+    # Phase 3 payload (no agency_id)
+    event = ChangeEvent(**event_payload)
+    import json, hashlib
+    data = dict(event_payload)
+    del data['event_id']
+    data['policy_context'] = event_payload.get('policy_context', {})
+    data['authority_context'] = event_payload.get('authority_context', {})
+    canonical = json.dumps(data, sort_keys=True, separators=(',', ':'))
+    expected_hash = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+    assert event.fingerprint == expected_hash
+
+def test_new_agency_id_influences_fingerprint(event_payload):
+    event = ChangeEvent(**event_payload)
+    event_payload_with_agency = dict(event_payload)
+    event_payload_with_agency['agency_id'] = 'custom-agency'
+    assert event.fingerprint != ChangeEvent(**event_payload_with_agency).fingerprint

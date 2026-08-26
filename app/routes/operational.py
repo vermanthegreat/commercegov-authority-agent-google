@@ -112,17 +112,19 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
         current_severity = -1
         if current_attention:
             current_severity = severity_order.get(current_attention.get("classification"), -1)
-        
-        new_severity = severity_order.get(assessment.classification.value, -1)
-        
+
+        new_severity = severity_order.get(assessment.classification.value, -1)  
+
+        is_winning = new_severity >= current_severity
+
         return {
-            "classification": assessment.classification.value if new_severity >= current_severity else current_attention.get("classification"),
-            "summary": assessment.summary,
-            "reason": assessment.reason,
+            "classification": assessment.classification.value if is_winning else current_attention.get("classification"),
+            "summary": assessment.summary if is_winning else current_attention.get("summary"),
+            "reason": assessment.reason if is_winning else current_attention.get("reason"),
             "evidence_refs": list(set(current_attention.get("evidence_refs", []) + assessment.evidence_refs)) if current_attention else assessment.evidence_refs,
-            "affected_scope": assessment.affected_scope,
-            "recommended_operator_action": assessment.recommended_operator_action if new_severity >= current_severity else current_attention.get("recommended_operator_action"),
-            "last_event_id": event.event_id
+            "affected_scope": assessment.affected_scope if is_winning else current_attention.get("affected_scope"),
+            "recommended_operator_action": assessment.recommended_operator_action if is_winning else current_attention.get("recommended_operator_action"),
+            "last_event_id": event.event_id if is_winning else current_attention.get("last_event_id")
         }
 
     store.upsert_attention(attention_key, _compute_attention_update)

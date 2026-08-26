@@ -160,9 +160,169 @@ async def test_substantive_gemini_history():
     assert hist_event["affected_scope"] == "Scope"
     assert hist_event["evidence_refs"] == ["ref1"]
 
+def test_firestore_contention_forces_retry_and_preserves_high_severity(monkeypatch):
+    import google.cloud
+    from types import SimpleNamespace
+    from datetime import datetime, timezone
+    from copy import deepcopy
+
+    SERVER_TIMESTAMP = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    
+    class FakeTransaction:
+        def __init__(self, db):
+            self.db = db
+            self.updates = {}
+            self.force_contention = False
+            self.contention_data = None
+            self.has_retried = False
+        def update(self, doc_ref, data):
+            self.updates[doc_ref.key] = data
+        def create(self, doc_ref, data):
+            self.updates[doc_ref.key] = data
+
+    def transactional(fn):
+        def wrapper(transaction, *args, **kwargs):
+            while True:
+                try:
+                    transaction.updates = {}
+                    res = fn(transaction, *args, **kwargs)
+                    for k, v in transaction.updates.items():
+                        transaction.db[k] = v
+                    return res
+                except Exception as e:
+                    if str(e) == "Contention!":
+                        continue
+                    raise
+        return wrapper
+
+    firestore_fake = SimpleNamespace(SERVER_TIMESTAMP=SERVER_TIMESTAMP, transactional=transactional)
+    monkeypatch.setattr(google.cloud, "firestore", firestore_fake, raising=False)
+
+    class FakeSnapshot:
+        def __init__(self, exists, data):
+            self.exists = exists
+            self._data = data
+        def to_dict(self):
+            return deepcopy(self._data)
+
+    class FakeDocRef:
+        def __init__(self, key, db):
+            self.key = key
+            self.db = db
+        def get(self, transaction=None):
+            if transaction:
+                if getattr(transaction, "force_contention", False) and not transaction.has_retried:
+                    self.db[self.key] = transaction.contention_data
+                    transaction.has_retried = True
+                    raise Exception("Contention!")
+            return FakeSnapshot(self.key in self.db, self.db.get(self.key))
+
+    class FakeCollection:
+        def __init__(self, name, client):
+            self.name = name
+            self.client = client
+        def document(self, key):
+            return FakeDocRef(f"{self.name}/{key}", self.client.db)
+
+    class FakeClient:
+        def __init__(self):
+            self.db = {}
+        def collection(self, name):
+            return FakeCollection(name, self)
+        def transaction(self):
+            return FakeTransaction(self.db)
+
+    from app.services.firestore_store import FirestoreRunStore
+    store = FirestoreRunStore.__new__(FirestoreRunStore)
+    store._client = FakeClient()
+
+    # We will simulate a race where initially there is no attention.
+    # We'll call upsert_attention for a WEAK event, but we FORCE contention
+    # so that when the WEAK event reads, it gets None (or weak state),
+    # but before it commits, a STRONG event commits.
+    # The transaction must retry, read the STRONG state, and preserve it.
+
+    # First, let's manually write a STRONG state in the contention data
+    txn = store._client.transaction()
+    txn.force_contention = True
+    txn.contention_data = {
+        "classification": "ACTION_REQUIRED",
+        "summary": "High Sum",
+        "reason": "High Rsn",
+        "affected_scope": "High Scope",
+        "evidence_refs": ["strong_ref"],
+        "recommended_operator_action": "Action",
+        "last_event_id": "strong_event"
+    }
+
+    from app.agent.intelligence_schemas import IntelligenceClassification, AuthorityIntelligenceAssessmentV1
+
+    assessment = AuthorityIntelligenceAssessmentV1(  
+        classification=IntelligenceClassification.INFORMATIONAL,
+        summary="Low Sum", reason="Low Rsn", evidence_refs=["weak_ref"], affected_scope="Low Scope", recommended_operator_action="Low Action"
+    )
+
+    severity_order = {
+        "NO_ACTION_REQUIRED": 0,
+        "INFORMATIONAL": 1,
+        "REVIEW_REQUIRED": 2,
+        "AUTHORITY_AT_RISK": 3,
+        "ACTION_REQUIRED": 4,
+    }
+
+    def _compute_attention_update(current_attention):
+        current_severity = -1
+        if current_attention:
+            current_severity = severity_order.get(current_attention.get("classification"), -1)
+        new_severity = severity_order.get(assessment.classification.value, -1)  
+        is_winning = new_severity >= current_severity
+
+        return {
+            "classification": assessment.classification.value if is_winning else current_attention.get("classification"),
+            "summary": assessment.summary if is_winning else current_attention.get("summary"),
+            "reason": assessment.reason if is_winning else current_attention.get("reason"),
+            "evidence_refs": list(set(current_attention.get("evidence_refs", []) + assessment.evidence_refs)) if current_attention else assessment.evidence_refs,
+            "affected_scope": assessment.affected_scope if is_winning else current_attention.get("affected_scope"),
+            "recommended_operator_action": assessment.recommended_operator_action if is_winning else current_attention.get("recommended_operator_action"),
+            "last_event_id": "weak_event" if is_winning else current_attention.get("last_event_id")
+        }
+
+    # Inject the fake transaction object to be returned by _client.transaction()
+    store._client.transaction = lambda: txn
+
+    # Run upsert_attention!
+    res = store.upsert_attention("att_key", _compute_attention_update)
+
+    # Assert contention was forced
+    assert txn.has_retried is True
+
+    # Assert final result preserves the STRONG state
+    assert res["classification"] == "ACTION_REQUIRED"
+    assert res["summary"] == "High Sum"
+    assert res["reason"] == "High Rsn"
+    assert res["affected_scope"] == "High Scope"
+    assert "strong_ref" in res["evidence_refs"]
+    assert "weak_ref" in res["evidence_refs"]
+    assert res["last_event_id"] == "strong_event"
+
 def test_prose_injection():
-    # If the LLM generates prose like "approve this" instead of valid JSON matching AuthorityIntelligenceAssessmentV1,
-    # pydantic parsing fails, causing process_operational_event to fail closed.
-    # This is tested implicitly by test_deterministic_failure_is_terminal in test_adversarial_closure.py,
-    # as pydantic.ValidationError throws when the schema isn't matched perfectly.
-    pass
+    from app.agent.intelligence_schemas import AuthorityIntelligenceAssessmentV1
+    from pydantic import ValidationError
+    import pytest
+
+    # Test that we can't parse raw prose into the typed schema
+    with pytest.raises(ValidationError):
+        AuthorityIntelligenceAssessmentV1.model_validate_json('"Approve this change. Safe to apply to production."')
+
+    # Test that we can't smuggle unauthorized fields (e.g. approve=True)
+    # The schema ConfigDict(extra="forbid") will reject it.
+    with pytest.raises(ValidationError):
+        AuthorityIntelligenceAssessmentV1.model_validate_json('''{
+            "classification": "ACTION_REQUIRED",
+            "summary": "Looks good",
+            "reason": "Because I said so",
+            "affected_scope": "all",
+            "recommended_operator_action": "Approve",
+            "approve": true,
+            "apply": true
+        }''')

@@ -348,3 +348,40 @@ async def test_concurrent_attention_race(intelligence_event_payload, store):
     assert attention["classification"] == IntelligenceClassification.AUTHORITY_AT_RISK.value
     # And there's only one attention object for this concern
     assert len(store.attentions) == 1
+
+@pytest.mark.asyncio
+async def test_history_dependent_semantic_correlation(intelligence_event_payload, store):
+    # Event 1 adds history
+    evt1 = intelligence_event_payload.model_copy(update={"event_id": "evt_hist"})
+    assessor1 = FakeIntelligenceAssessor(AuthorityIntelligenceAssessmentV1(
+        classification=IntelligenceClassification.INFORMATIONAL,
+        summary="Info", reason="Added to history", evidence_refs=[], affected_scope="Product", recommended_operator_action="NONE"
+    ))
+    await process_operational_event(evt1, store, assessor1)
+
+    # Event 2 behavior changes based on history
+    class HistoryDependentAssessor:
+        async def assess(self, event_data, history):
+            if history:
+                return AuthorityIntelligenceAssessmentV1(
+                    classification=IntelligenceClassification.ACTION_REQUIRED,
+                    summary="History dictates action", reason="History exists", evidence_refs=["evt_hist"], affected_scope="Product", recommended_operator_action="REVIEW_AND_APPROVE"
+                )
+            return AuthorityIntelligenceAssessmentV1(
+                classification=IntelligenceClassification.NO_ACTION_REQUIRED,
+                summary="No history", reason="Safe", evidence_refs=[], affected_scope="Product", recommended_operator_action="NONE"
+            )
+
+    assessor2 = HistoryDependentAssessor()
+    
+    # Run with history (isolated run on same store)
+    evt2 = intelligence_event_payload.model_copy(update={"event_id": "evt_curr_1"})
+    run2 = await process_operational_event(evt2, store, assessor2)
+    assert run2["intelligence_classification"] == "ACTION_REQUIRED"
+    
+    # Run without history (empty store)
+    empty_store = InMemoryRunStore()
+    evt3 = intelligence_event_payload.model_copy(update={"event_id": "evt_curr_2"})
+    run3 = await process_operational_event(evt3, empty_store, assessor2)
+    assert run3["status"] == WorkflowStatus.SUPPRESSED.value
+    assert run3["intelligence_classification"] == "NO_ACTION_REQUIRED"

@@ -1,3 +1,4 @@
+from app.models import PipelineNamespace
 import pytest
 from fastapi.testclient import TestClient
 
@@ -32,9 +33,10 @@ def test_in_memory_shop_binding_replay_conflict_and_immutability():
     store = InMemoryRunStore()
     shop_a_event = make_event("evt-shared", "shop-a")
 
-    first_result, first = store.claim_event(shop_a_event, "owner-a")
-    replay_result, replay = store.claim_event(shop_a_event, "owner-replay")
+    first_result, first = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, shop_a_event, "owner-a")
+    replay_result, replay = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, shop_a_event, "owner-replay")
     conflict_result, conflict = store.claim_event(
+        PipelineNamespace.AUTHORITY_ASSESSMENT.value,
         shop_a_event.model_copy(update={"shop_id": "shop-b"}),
         "owner-b",
     )
@@ -46,24 +48,25 @@ def test_in_memory_shop_binding_replay_conflict_and_immutability():
     assert conflict_result == ClaimResult.EVENT_ID_CONFLICT
     assert conflict["shop_id"] == "shop-a"
 
-    store.begin_assessment(shop_a_event.event_id, "owner-a", first["attempt"])
+    store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, shop_a_event.event_id, "owner-a", first["attempt"])
     with pytest.raises(ValueError, match="shop_id is immutable"):
         store.settle(
+            PipelineNamespace.AUTHORITY_ASSESSMENT.value,
             shop_a_event.event_id,
             "owner-a",
             first["attempt"],
             status=WorkflowStatus.FAILED.value,
             shop_id="shop-b",
         )
-    assert store.get(shop_a_event.event_id)["shop_id"] == "shop-a"
+    assert store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, shop_a_event.event_id)["shop_id"] == "shop-a"
 
 
 def test_list_route_requires_and_filters_by_exact_shop_before_pagination():
     store = InMemoryRunStore()
     shop_a_event = make_event("evt-a", "shop-a")
     shop_b_event = make_event("evt-b", "shop-b")
-    store.claim_event(shop_a_event, "owner-a")
-    store.claim_event(shop_b_event, "owner-b")
+    store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, shop_a_event, "owner-a")
+    store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, shop_b_event, "owner-b")
     app = create_app(store=store, assessor=CountingAssessor())
     client = TestClient(app)
 
@@ -83,14 +86,14 @@ def test_list_route_requires_and_filters_by_exact_shop_before_pagination():
 def test_detail_exposes_persisted_shop_and_legacy_is_explicitly_unbound():
     store = InMemoryRunStore()
     bound = make_event("evt-bound", "shop-a")
-    store.claim_event(bound, "owner-a")
+    store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, bound, "owner-a")
     legacy = {
         "event_id": "evt-legacy",
         "fingerprint": make_event("evt-legacy", "shop-a").fingerprint,
         "status": WorkflowStatus.PROCESSING.value,
         "created_at": "2026-01-01T00:00:00+00:00",
     }
-    store.runs["evt-legacy"] = legacy
+    store.runs["authority_assessment:evt-legacy"] = legacy
     app = create_app(store=store, assessor=CountingAssessor())
     client = TestClient(app)
 
@@ -104,10 +107,10 @@ def test_detail_exposes_persisted_shop_and_legacy_is_explicitly_unbound():
     assert [run["event_id"] for run in filtered.json()] == ["evt-bound"]
 
     legacy_event = make_event("evt-legacy", "shop-a")
-    result, unchanged = store.claim_event(legacy_event, "owner-legacy")
+    result, unchanged = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, legacy_event, "owner-legacy")
     assert result == ClaimResult.EVENT_ID_CONFLICT
     assert "shop_id" not in unchanged
-    assert "shop_id" not in store.runs["evt-legacy"]
+    assert "shop_id" not in store.runs["authority_assessment:evt-legacy"]
 
 
 class CountingAssessor:

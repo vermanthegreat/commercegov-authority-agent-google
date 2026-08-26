@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from app.agent.authority_agent import AuthorityAssessor
-from app.models import AuthorityAssessment, ChangeEvent, Classification, ClaimResult, RecommendedNextAction, WorkflowStatus
+from app.models import AuthorityAssessment, PipelineNamespace, ChangeEvent, Classification, ClaimResult, RecommendedNextAction, WorkflowStatus
 from app.services.event_parser import EventParseError, parse_change_event
 from app.services.firestore_store import RunStore
 
@@ -41,7 +41,7 @@ from app.services.commercegov_client import CommerceGovClient, CommerceGovTransi
 
 async def process_event(event: ChangeEvent, store: RunStore, assessor: AuthorityAssessor, cg_client: CommerceGovClient) -> dict[str, Any]:
     owner_id = str(uuid.uuid4())
-    claim, run = store.claim_event(event, owner_id)
+    claim, run = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, owner_id)
 
     if claim == ClaimResult.IN_PROGRESS:
         return run
@@ -52,7 +52,7 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
         raise HTTPException(status_code=409, detail="Event ID conflict")
 
     attempt = run["attempt"]
-    store.begin_assessment(event.event_id, owner_id, attempt)
+    store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, owner_id, attempt)
 
     from app.agent.authority_agent import TransientPreAssessmentError
     import pydantic
@@ -61,13 +61,14 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
         assessment = await assessor.assess(event)  # exactly one bounded model call
     except TransientPreAssessmentError as exc:
         try:
-            store.release_claim(event.event_id, owner_id, attempt)
+            store.release_claim(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, owner_id, attempt)
         except Exception:
             pass
         raise HTTPException(status_code=503, detail="Transient authority assessment failure") from exc
     except pydantic.ValidationError as exc:
         try:
             store.settle(
+                PipelineNamespace.AUTHORITY_ASSESSMENT.value,
                 event.event_id,
                 owner_id,
                 attempt,
@@ -82,6 +83,7 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
         # dispatch. Fail closed and require intervention instead of re-assessing.
         try:
             store.mark_assessment_unknown(
+                PipelineNamespace.AUTHORITY_ASSESSMENT.value,
                 event.event_id,
                 owner_id,
                 attempt,
@@ -103,6 +105,7 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
     except Exception as exc:
         try:
             store.settle(
+                PipelineNamespace.AUTHORITY_ASSESSMENT.value,
                 event.event_id,
                 owner_id,
                 attempt,
@@ -189,8 +192,8 @@ async def process_event(event: ChangeEvent, store: RunStore, assessor: Authority
     if proposal_id:
         settle_kwargs["proposal_id"] = proposal_id
 
-    settled = store.settle(event.event_id, owner_id, attempt, **settle_kwargs)
-    return store.get(event.event_id) or settled
+    settled = store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, owner_id, attempt, **settle_kwargs)
+    return store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id) or settled
 
 
 @router.post("/events/change")
@@ -231,19 +234,19 @@ async def list_runs(
 ) -> list[dict[str, Any]]:
     # Simple operational projection endpoint for CommerceGov Agent Runs M1
     store: RunStore = request.app.state.run_store
-    runs = store.list_events(shop_id=shop_id, limit=limit, offset=offset)
+    runs = store.list_events(PipelineNamespace.AUTHORITY_ASSESSMENT.value, shop_id=shop_id, limit=limit, offset=offset)
     return [_run_read_projection(run) for run in runs]
 
 @router.get("/runs/stats")
 async def get_stats(request: Request) -> dict[str, int]:
     # Simple operational projection endpoint for CommerceGov Agent Runs M1
     store: RunStore = request.app.state.run_store
-    return store.get_stats()
+    return store.get_stats(PipelineNamespace.AUTHORITY_ASSESSMENT.value)
 
 @router.get("/runs/{event_id}")
 async def get_run(request: Request, event_id: str) -> dict[str, Any]:
     store: RunStore = request.app.state.run_store
-    run = store.get(event_id)
+    run = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return _run_read_projection(run)

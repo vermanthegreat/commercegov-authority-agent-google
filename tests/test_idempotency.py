@@ -1,3 +1,4 @@
+from app.models import PipelineNamespace
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -53,7 +54,7 @@ def concurrent_claims(store, event, owners, lease_seconds=60):
 
     def claim(owner):
         barrier.wait()
-        return owner, store.claim_event(event, owner, lease_seconds=lease_seconds)[0]
+        return owner, store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, owner, lease_seconds=lease_seconds)[0]
 
     with ThreadPoolExecutor(max_workers=len(owners)) as executor:
         return list(executor.map(claim, owners))
@@ -73,7 +74,7 @@ def test_threaded_concurrent_stale_recovery_has_one_owner(base_payload):
     clock = ManualClock()
     store = InMemoryRunStore(monotonic_clock=clock)
     event = ChangeEvent(**base_payload)
-    assert store.claim_event(event, "owner-original", lease_seconds=10)[0] == ClaimResult.CLAIM_ACQUIRED
+    assert store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-original", lease_seconds=10)[0] == ClaimResult.CLAIM_ACQUIRED
     clock.set(11)
 
     results = concurrent_claims(store, event, ["owner-a", "owner-b"], lease_seconds=10)
@@ -105,7 +106,7 @@ async def test_concurrent_delivery_calls_assessor_once(app_with_fake, base_paylo
 def test_in_progress_duplicate_does_not_assess(app_with_fake, base_payload):
     app, store, assessor, cg_client = app_with_fake
     event = ChangeEvent(**base_payload)
-    assert store.claim_event(event, "owner-1")[0] == ClaimResult.CLAIM_ACQUIRED
+    assert store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-1")[0] == ClaimResult.CLAIM_ACQUIRED
 
     response = TestClient(app).post("/events/change", json=base_payload)
 
@@ -153,39 +154,40 @@ def test_worker_wall_clock_skew_cannot_expire_processing_claim(base_payload, mon
     store = InMemoryRunStore(monotonic_clock=clock)
     event = ChangeEvent(**base_payload)
     monkeypatch.setattr("app.services.firestore_store._now", lambda: "1900-01-01T00:00:00+00:00")
-    assert store.claim_event(event, "owner-behind", lease_seconds=60)[0] == ClaimResult.CLAIM_ACQUIRED
+    assert store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-behind", lease_seconds=60)[0] == ClaimResult.CLAIM_ACQUIRED
 
     monkeypatch.setattr("app.services.firestore_store._now", lambda: "2999-01-01T00:00:00+00:00")
-    assert store.claim_event(event, "owner-ahead", lease_seconds=60)[0] == ClaimResult.IN_PROGRESS
+    assert store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-ahead", lease_seconds=60)[0] == ClaimResult.IN_PROGRESS
 
     monkeypatch.setattr("app.services.firestore_store._now", lambda: "1800-01-01T00:00:00+00:00")
-    assert store.claim_event(event, "owner-behind-again", lease_seconds=60)[0] == ClaimResult.IN_PROGRESS
+    assert store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-behind-again", lease_seconds=60)[0] == ClaimResult.IN_PROGRESS
 
 
 def test_stale_owner_and_owner_id_reuse_are_fenced(base_payload):
     clock = ManualClock()
     store = InMemoryRunStore(monotonic_clock=clock)
     event = ChangeEvent(**base_payload)
-    _, run1 = store.claim_event(event, "owner-a", lease_seconds=1)
+    _, run1 = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-a", lease_seconds=1)
     clock.set(2)
-    _, run2 = store.claim_event(event, "owner-b", lease_seconds=1)
+    _, run2 = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b", lease_seconds=1)
     clock.set(4)
-    result3, run3 = store.claim_event(event, "owner-a", lease_seconds=1)
+    result3, run3 = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-a", lease_seconds=1)
     assert result3 == ClaimResult.STALE_CLAIM_RECOVERED
     assert run3["attempt"] > run2["attempt"] > run1["attempt"]
-    store.begin_assessment(event.event_id, "owner-a", run3["attempt"])
+    store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-a", run3["attempt"])
 
     with pytest.raises(RuntimeError, match="Stale owner"):
-        store.settle(event.event_id, "owner-a", run1["attempt"], status=WorkflowStatus.FAILED.value)
+        store.settle(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-a", run1["attempt"], status=WorkflowStatus.FAILED.value)
 
 
 def test_terminal_settlement_is_monotonic_and_idempotent(base_payload):
     store = InMemoryRunStore()
     event = ChangeEvent(**base_payload)
-    _, run = store.claim_event(event, "owner")
-    store.begin_assessment(event.event_id, "owner", run["attempt"])
+    _, run = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner")
+    store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner", run["attempt"])
     original = store.settle(
-        event.event_id,
+            PipelineNamespace.AUTHORITY_ASSESSMENT.value,
+            event.event_id,
         "owner",
         run["attempt"],
         status=WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value,
@@ -193,14 +195,16 @@ def test_terminal_settlement_is_monotonic_and_idempotent(base_payload):
     )
 
     rejected_overwrite = store.settle(
-        event.event_id,
+            PipelineNamespace.AUTHORITY_ASSESSMENT.value,
+            event.event_id,
         "owner",
         run["attempt"],
         status=WorkflowStatus.FAILED.value,
         reason="replacement",
     )
     idempotent = store.settle(
-        event.event_id,
+            PipelineNamespace.AUTHORITY_ASSESSMENT.value,
+            event.event_id,
         "owner",
         run["attempt"],
         status=WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value,
@@ -209,7 +213,7 @@ def test_terminal_settlement_is_monotonic_and_idempotent(base_payload):
 
     assert rejected_overwrite == original
     assert idempotent == original
-    assert store.get(event.event_id) == original
+    assert store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id) == original
 
 
 @run_async_test
@@ -219,8 +223,8 @@ async def test_successful_commit_ack_failure_cannot_downgrade(base_payload, huma
             super().__init__()
             self.failed_ack = False
 
-        def settle(self, event_id, owner_id, attempt, **fields):
-            result = super().settle(event_id, owner_id, attempt, **fields)
+        def settle(self, namespace, event_id, owner_id, attempt, **fields):
+            result = super().settle(namespace, event_id, owner_id, attempt, **fields)
             if not self.failed_ack and fields.get("status") == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value:
                 self.failed_ack = True
                 raise TimeoutError("commit acknowledged by store but not caller")
@@ -235,7 +239,7 @@ async def test_successful_commit_ack_failure_cannot_downgrade(base_payload, huma
     with pytest.raises(TimeoutError):
         await process_event(ChangeEvent(**base_payload), store, Assessor(), FakeCommerceGovClient())
 
-    persisted = store.get(base_payload["event_id"])
+    persisted = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, base_payload["event_id"])
     assert persisted["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
     assert persisted["reason"] != "Authority assessment failed"
 
@@ -243,8 +247,8 @@ async def test_successful_commit_ack_failure_cannot_downgrade(base_payload, huma
 @run_async_test
 async def test_post_settlement_read_failure_cannot_downgrade(base_payload, human_assessment):
     class ReadFailingStore(InMemoryRunStore):
-        def get(self, event_id):
-            run = super().get(event_id)
+        def get(self, namespace, event_id):
+            run = super().get(namespace, event_id)
             if run and run["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value:
                 raise OSError("response read failed")
             return run
@@ -258,7 +262,7 @@ async def test_post_settlement_read_failure_cannot_downgrade(base_payload, human
     with pytest.raises(OSError):
         await process_event(ChangeEvent(**base_payload), store, Assessor(), FakeCommerceGovClient())
 
-    persisted = InMemoryRunStore.get(store, base_payload["event_id"])
+    persisted = InMemoryRunStore.get(store, PipelineNamespace.AUTHORITY_ASSESSMENT.value, base_payload["event_id"])
     assert persisted["status"] == WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value
 
 
@@ -279,7 +283,7 @@ async def test_ambiguous_assessor_failure_fails_closed_without_retry(base_payloa
     with pytest.raises(RuntimeError, match="outcome is unknown"):
         await process_event(event, store, assessor, FakeCommerceGovClient())
 
-    assert store.get(event.event_id)["status"] == WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN.value
+    assert store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)["status"] == WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN.value
     replay = await process_event(event, store, assessor, FakeCommerceGovClient())
     assert replay["status"] == WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN.value
     assert assessor.calls == 1
@@ -289,7 +293,7 @@ def test_terminal_replay_and_event_conflict_preserve_record(app_with_fake, base_
     app, store, assessor, cg_client = app_with_fake
     client = TestClient(app)
     first = client.post("/events/change", json=base_payload)
-    original = store.get(base_payload["event_id"])
+    original = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, base_payload["event_id"])
 
     replay = client.post("/events/change", json=base_payload)
     conflict_payload = base_payload | {"proposed_value": "different"}
@@ -298,5 +302,5 @@ def test_terminal_replay_and_event_conflict_preserve_record(app_with_fake, base_
     assert first.status_code == replay.status_code == 200
     assert replay.json() == first.json()
     assert conflict.status_code == 409
-    assert store.get(base_payload["event_id"]) == original
+    assert store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, base_payload["event_id"]) == original
     assert assessor.calls == 1

@@ -3,7 +3,7 @@ from copy import deepcopy
 import pytest
 from pydantic import ValidationError
 
-from app.models import ChangeEvent
+from app.models import ChangeEvent, PipelineNamespace
 
 
 @pytest.fixture

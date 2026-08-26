@@ -1,3 +1,4 @@
+from app.models import PipelineNamespace
 import pytest
 from fastapi.testclient import TestClient
 
@@ -72,7 +73,7 @@ def test_authenticated_valid_request_creates_one_logical_run(authenticated_app):
     assert "proposal_id" in data
     
     # Exactly one run created
-    stats = store.get_stats()
+    stats = store.get_stats(PipelineNamespace.AUTHORITY_ASSESSMENT.value)
     assert stats["events_total"] == 1
     
     # Exactly one Gemini assessment
@@ -112,7 +113,7 @@ def test_identical_retry_returns_same_run_without_second_assessment(authenticate
     assert cg_client.calls == 1
     
     # Only one logical run
-    assert store.get_stats()["events_total"] == 1
+    assert store.get_stats(PipelineNamespace.AUTHORITY_ASSESSMENT.value)["events_total"] == 1
 
 def test_payload_drift_conflicts(authenticated_app):
     app, store, assessor, _ = authenticated_app

@@ -1,3 +1,4 @@
+from app.models import PipelineNamespace
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -127,25 +128,25 @@ def event():
 def test_firestore_server_time_controls_processing_recovery(firestore_store, event, monkeypatch):
     store, client = firestore_store
     monkeypatch.setattr("app.services.firestore_store._now", lambda: "2999-01-01T00:00:00+00:00")
-    assert store.claim_event(event, "owner-a", lease_seconds=60)[0] == ClaimResult.CLAIM_ACQUIRED
+    assert store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-a", lease_seconds=60)[0] == ClaimResult.CLAIM_ACQUIRED
 
     client.server_time += timedelta(seconds=59)
     monkeypatch.setattr("app.services.firestore_store._now", lambda: "1800-01-01T00:00:00+00:00")
-    assert store.claim_event(event, "owner-b", lease_seconds=60)[0] == ClaimResult.IN_PROGRESS
+    assert store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b", lease_seconds=60)[0] == ClaimResult.IN_PROGRESS
 
     client.server_time += timedelta(seconds=2)
-    result, recovered = store.claim_event(event, "owner-b", lease_seconds=60)
+    result, recovered = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b", lease_seconds=60)
     assert result == ClaimResult.STALE_CLAIM_RECOVERED
     assert recovered["attempt"] == 2
 
 
 def test_firestore_assessing_is_never_recovered(firestore_store, event):
     store, client = firestore_store
-    _, run = store.claim_event(event, "owner-a", lease_seconds=1)
-    store.begin_assessment(event.event_id, "owner-a", run["attempt"])
+    _, run = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-a", lease_seconds=1)
+    store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-a", run["attempt"])
     client.server_time += timedelta(days=365)
 
-    result, existing = store.claim_event(event, "owner-b", lease_seconds=1)
+    result, existing = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b", lease_seconds=1)
 
     assert result == ClaimResult.IN_PROGRESS
     assert existing["status"] == WorkflowStatus.ASSESSING.value
@@ -154,19 +155,21 @@ def test_firestore_assessing_is_never_recovered(firestore_store, event):
 
 def test_firestore_terminal_is_immutable_and_fenced(firestore_store, event):
     store, _ = firestore_store
-    _, run = store.claim_event(event, "owner-a")
-    store.begin_assessment(event.event_id, "owner-a", run["attempt"])
+    _, run = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-a")
+    store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-a", run["attempt"])
     store.settle(
-        event.event_id,
+            PipelineNamespace.AUTHORITY_ASSESSMENT.value,
+            event.event_id,
         "owner-a",
         run["attempt"],
         status=WorkflowStatus.WAITING_FOR_HUMAN_AUTHORITY.value,
         reason="original",
     )
-    original = store.get(event.event_id)
+    original = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)
 
     preserved = store.settle(
-        event.event_id,
+            PipelineNamespace.AUTHORITY_ASSESSMENT.value,
+            event.event_id,
         "owner-a",
         run["attempt"],
         status=WorkflowStatus.FAILED.value,
@@ -174,6 +177,7 @@ def test_firestore_terminal_is_immutable_and_fenced(firestore_store, event):
     )
     with pytest.raises(RuntimeError, match="Stale owner"):
         store.settle(
+            PipelineNamespace.AUTHORITY_ASSESSMENT.value,
             event.event_id,
             "owner-a",
             run["attempt"] + 1,
@@ -181,7 +185,7 @@ def test_firestore_terminal_is_immutable_and_fenced(firestore_store, event):
         )
 
     assert preserved == original
-    assert store.get(event.event_id)["reason"] == "original"
+    assert store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)["reason"] == "original"
 
 
 def test_firestore_operations_use_transactional_read_modify_write():
@@ -203,7 +207,7 @@ def test_local_clock_skew_cannot_create_dual_ownership(firestore_store, event, m
     
     # Worker A claims with a clock far in the future
     monkeypatch.setattr("app.services.firestore_store._now", lambda: "2999-01-01T00:00:00+00:00")
-    result_a, _ = store.claim_event(event, "owner-a", lease_seconds=60)
+    result_a, _ = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-a", lease_seconds=60)
     assert result_a == ClaimResult.CLAIM_ACQUIRED
 
     # Worker B tries to claim exactly 1 second later (server time)
@@ -213,7 +217,7 @@ def test_local_clock_skew_cannot_create_dual_ownership(firestore_store, event, m
     monkeypatch.setattr("app.services.firestore_store._now", lambda: "1800-01-01T00:00:00+00:00")
     
     # If B's clock was used, B might think A's claim is old. But server time is used.
-    result_b, _ = store.claim_event(event, "owner-b", lease_seconds=60)
+    result_b, _ = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b", lease_seconds=60)
     
     # Worker B must not acquire the claim
     assert result_b == ClaimResult.IN_PROGRESS
@@ -221,44 +225,45 @@ def test_local_clock_skew_cannot_create_dual_ownership(firestore_store, event, m
 
 def test_firestore_shop_binding_filtering_and_legacy_fail_closed(firestore_store, event):
     store, client = firestore_store
-    result, shop_a_run = store.claim_event(event, "owner-a")
+    result, shop_a_run = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-a")
     assert result == ClaimResult.CLAIM_ACQUIRED
     assert shop_a_run["shop_id"] == "shop"
 
-    same_result, same_run = store.claim_event(event, "owner-replay")
+    same_result, same_run = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-replay")
     assert same_result == ClaimResult.IN_PROGRESS
     assert same_run["shop_id"] == "shop"
 
     cross_shop = event.model_copy(update={"shop_id": "other-shop"})
-    conflict, preserved = store.claim_event(cross_shop, "owner-b")
+    conflict, preserved = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, cross_shop, "owner-b")
     assert conflict == ClaimResult.EVENT_ID_CONFLICT
     assert preserved["shop_id"] == "shop"
 
     shop_b_event = event.model_copy(update={"event_id": "evt-firestore-b", "shop_id": "other-shop"})
-    assert store.claim_event(shop_b_event, "owner-b")[0] == ClaimResult.CLAIM_ACQUIRED
-    client.documents["evt-firestore-legacy"] = {
+    assert store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, shop_b_event, "owner-b")[0] == ClaimResult.CLAIM_ACQUIRED
+    client.documents["authority_assessment:evt-firestore-legacy"] = {
         "event_id": "evt-firestore-legacy",
         "fingerprint": event.model_copy(update={"event_id": "evt-firestore-legacy"}).fingerprint,
         "status": WorkflowStatus.PROCESSING.value,
         "created_at": client.server_time,
     }
 
-    assert [run["event_id"] for run in store.list_events("shop")] == [event.event_id]
-    assert [run["event_id"] for run in store.list_events("other-shop")] == [shop_b_event.event_id]
+    assert [run["event_id"] for run in store.list_events(PipelineNamespace.AUTHORITY_ASSESSMENT.value, "shop")] == [event.event_id]
+    assert [run["event_id"] for run in store.list_events(PipelineNamespace.AUTHORITY_ASSESSMENT.value, "other-shop")] == [shop_b_event.event_id]
 
     legacy_event = event.model_copy(update={"event_id": "evt-firestore-legacy"})
-    legacy_result, legacy = store.claim_event(legacy_event, "owner-legacy")
+    legacy_result, legacy = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, legacy_event, "owner-legacy")
     assert legacy_result == ClaimResult.EVENT_ID_CONFLICT
     assert "shop_id" not in legacy
 
 
 def test_firestore_shop_id_cannot_change_during_settlement(firestore_store, event):
     store, _ = firestore_store
-    _, run = store.claim_event(event, "owner-a")
-    store.begin_assessment(event.event_id, "owner-a", run["attempt"])
+    _, run = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-a")
+    store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-a", run["attempt"])
 
     with pytest.raises(ValueError, match="shop_id is immutable"):
         store.settle(
+            PipelineNamespace.AUTHORITY_ASSESSMENT.value,
             event.event_id,
             "owner-a",
             run["attempt"],
@@ -266,4 +271,4 @@ def test_firestore_shop_id_cannot_change_during_settlement(firestore_store, even
             shop_id="other-shop",
         )
 
-    assert store.get(event.event_id)["shop_id"] == "shop"
+    assert store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)["shop_id"] == "shop"

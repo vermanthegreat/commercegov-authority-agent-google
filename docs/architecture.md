@@ -51,11 +51,11 @@ CommerceGov / human workflow
 ```
 
 **Core Components:**
-- **Taskmaster**: runtime
-- **Authority Intelligence**: reasoning layer
-- **Gemini**: reasoning engine
+- **Taskmaster**: durable continuous runtime
+- **Authority Intelligence**: correlation + relevance + prioritization
+- **Gemini**: semantic reasoning engine
 - **Firestore**: durable operational memory
-- **CommerceGov**: production authority
+- **CommerceGov**: production authority / enforcement boundary
 
 **Important Boundaries & Trust Rules:**
 - **The AI reasons about operations. It does not get to redefine production authority.**

@@ -1,3 +1,4 @@
+from app.models import PipelineNamespace
 import asyncio
 import pytest
 from app.models import WorkflowStatus, ChangeEvent, ClaimResult
@@ -58,11 +59,11 @@ async def test_transient_failure_recovery(event):
     assert exc.value.status_code == 503
     
     # State should be reverted to PROCESSING and claim clock reset
-    run = store.get(event.event_id)
+    run = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)
     assert run["status"] == WorkflowStatus.PROCESSING.value
     
     # Another worker can immediately claim it
-    claim, new_run = store.claim_event(event, "owner-b")
+    claim, new_run = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b")
     assert claim == ClaimResult.STALE_CLAIM_RECOVERED
     assert new_run["attempt"] == 2
 
@@ -76,11 +77,11 @@ async def test_ambiguous_failure_is_terminal(event):
     with pytest.raises(RuntimeError, match="unknown"):
         await process_event(event, store, assessor, cg_client)
         
-    run = store.get(event.event_id)
+    run = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)
     assert run["status"] == WorkflowStatus.ASSESSMENT_OUTCOME_UNKNOWN.value
     
     # Another worker CANNOT claim it
-    claim, _ = store.claim_event(event, "owner-b")
+    claim, _ = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b")
     assert claim == ClaimResult.TERMINAL_REPLAY
 
 @pytest.mark.asyncio
@@ -94,11 +95,11 @@ async def test_deterministic_failure_is_terminal(event):
     with pytest.raises(RuntimeError, match="Deterministic"):
         await process_event(event, store, assessor, cg_client)
         
-    run = store.get(event.event_id)
+    run = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)
     assert run["status"] == WorkflowStatus.FAILED.value
     
     # Another worker CANNOT claim it
-    claim, _ = store.claim_event(event, "owner-b")
+    claim, _ = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b")
     assert claim == ClaimResult.TERMINAL_REPLAY
 
 @pytest.mark.asyncio
@@ -106,10 +107,11 @@ async def test_terminal_immutability_against_stale_worker(event, assessment, mon
     store = InMemoryRunStore()
     
     # Worker B completes the event (e.g. after worker A timed out)
-    claim_b, run_b = store.claim_event(event, "owner-b")
-    store.begin_assessment(event.event_id, "owner-b", run_b["attempt"])
+    claim_b, run_b = store.claim_event(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event, "owner-b")
+    store.begin_assessment(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-b", run_b["attempt"])
     store.settle(
-        event.event_id, "owner-b", run_b["attempt"], 
+            PipelineNamespace.AUTHORITY_ASSESSMENT.value,
+            event.event_id, "owner-b", run_b["attempt"], 
         status=WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value,
         reason="completed by B"
     )
@@ -122,9 +124,9 @@ async def test_terminal_immutability_against_stale_worker(event, assessment, mon
     # a fake old claim. Wait, process_event claims it itself. 
     # Let's just invoke the exception handler directly via store.mark_assessment_unknown
     with pytest.raises(RuntimeError, match="Stale owner"):
-        store.mark_assessment_unknown(event.event_id, "owner-a", 1, "A failed")
+        store.mark_assessment_unknown(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id, "owner-a", 1, "A failed")
         
-    run = store.get(event.event_id)
+    run = store.get(PipelineNamespace.AUTHORITY_ASSESSMENT.value, event.event_id)
     assert run["status"] == WorkflowStatus.AUTONOMOUSLY_CONTINUABLE.value
     assert run["reason"] == "completed by B"
 

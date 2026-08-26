@@ -35,3 +35,16 @@ def test_terminal_replay_does_not_invoke_model_again(app_with_fake, event_payloa
     assert replay.json() == first.json()
     assert assessor.calls == 1
     assert "authority_terminal_replay event_id=evt_001" in caplog.messages
+
+def test_blocked_classification_persists_blocked_state(app_with_fake, event_payload):
+    app, _, assessor, _ = app_with_fake
+    assessor.result = assessor.result.model_copy(update={
+        "classification": Classification.BLOCKED,
+        "recommended_next_action": RecommendedNextAction.BLOCK,
+    })
+    # Bypass human requirement so it relies purely on model blocked status
+    event_payload["authority_context"]["requires_human_approval"] = False
+    response = TestClient(app).post("/events/change", json=event_payload)
+    assert response.status_code == 200
+    assert response.json()["status"] == WorkflowStatus.BLOCKED.value
+

@@ -38,7 +38,15 @@ class CommerceGovClient:
         
         async with httpx.AsyncClient() as client:
             try:
-                resp = await client.post(url, headers=headers, json=proposal.model_dump(mode="json"), timeout=10.0)
+                resp = await client.post(
+                    url,
+                    headers=headers,
+                    json={
+                        "changes": proposal.requested_changes,
+                        "idempotency_key": proposal.idempotency_key,
+                    },
+                    timeout=10.0,
+                )
             except httpx.RequestError as e:
                 raise CommerceGovTransientError(f"Transport error: {e}") from e
 

@@ -1,74 +1,87 @@
 # Architecture
 
-Phase 1 is a small event-to-checkpoint service. It accepts the hackathon adapter contract directly or inside a Pub/Sub push envelope, validates it, calls one bounded ADK/Gemini assessment, validates the result in Python, and persists a workflow checkpoint in `authority_agent_runs`.
+The hackathon submission centers on an event-driven Authority Intelligence workflow deployed on Google Cloud Run. It performs autonomous assessment and routing, then stops at the human authority boundary.
 
-```text
-Commerce Event
-      ↓
-Validate / Normalize
-      ↓
-Deterministic Fingerprint
-      ↓
-Single-flight / Lease (Firestore)
-      ↓
-Google ADK + Gemini (Vertex AI)
-      ↓
-Structured Assessment
-      ↓
-Python Schema / Authority Enforcement
-      ↓
-Evidence-Bound Checkpoint
-      ↓
-CommerceGovProposalV1
-      ↓
-Terminal / Replay-Safe State
-```
-
-## Phase 3: Authority Intelligence
-
-Phase 3 introduces the Authority Intelligence layer which reasons across multiple events to determine when operator attention is required. 
-
-**Conceptual Architecture:**
+## Primary Taskmaster demo path
 
 ```mermaid
 flowchart TD
-    E[Commerce Event] --> T[Taskmaster / Event Lifecycle]
-    T --> H[(Bounded Firestore History)]
-    H --> ADK[Google ADK]
-    ADK --> G[Gemini 3.5]
-    G --> SAI[Structured Authority Intelligence]
-    SAI --> PE[Deterministic Python Enforcement]
-    
-    PE --> N[Attention / Escalation / Governed Proposal]
-    PE --> B[BLOCKED / SUPPRESSED]
-    
-    N --> CB[CommerceGov Governance Boundary]
-    B --> CB
-    
-    CB -.- NO_AUTH[NO DIRECT SHOPIFY WRITE]
-    
-    classDef boundary fill:#f9d0c4,stroke:#333,stroke-width:2px;
-    class CB boundary;
-    classDef ai fill:#d4e6f1,stroke:#333,stroke-width:2px;
-    class ADK,G ai;
-    classDef enforced fill:#d5f5e3,stroke:#333,stroke-width:2px;
-    class PE,H enforced;
-    classDef red fill:#f1948a,stroke:#333,stroke-width:2px,color:#fff;
-    class NO_AUTH red;
+    E["Operational Event<br/>POST /events/operational"]
+
+    subgraph GCP["Google Cloud"]
+        subgraph CR["Cloud Run: commercegov-authority-agent"]
+            T["Authority Intelligence<br/>Taskmaster"]
+            B["Identity binding +<br/>single-flight claim / lease"]
+            ADK["Google ADK + Vertex AI Gemini<br/>semantic assessment"]
+            P["Deterministic Python<br/>authority enforcement"]
+            R["Bounded routing<br/>HUMAN_AUTHORITY_REQUIRED"]
+        end
+
+        H[("Firestore<br/>bounded tenant history")]
+        F[("Firestore<br/>authority_agent_runs<br/>+ operator_attention")]
+    end
+
+    HUMAN["HUMAN AUTHORITY BOUNDARY<br/>NO SHOPIFY CREDENTIALS<br/>NO APPROVE · NO APPLY<br/>NO DIRECT PRODUCTION WRITE"]
+
+    E --> T --> B --> H --> ADK --> P --> F --> R --> HUMAN
+
+    classDef ai fill:#dbeafe,stroke:#1d4ed8,stroke-width:2px,color:#172554;
+    classDef state fill:#dcfce7,stroke:#15803d,stroke-width:2px,color:#052e16;
+    classDef boundary fill:#fee2e2,stroke:#b91c1c,stroke-width:3px,color:#450a0a;
+    class T,ADK ai;
+    class H,F state;
+    class HUMAN boundary;
 ```
 
-**Core Components:**
-- **Taskmaster**: durable continuous runtime
-- **Authority Intelligence**: correlation + relevance + prioritization
-- **Gemini**: semantic reasoning engine
-- **Firestore**: durable operational memory
-- **CommerceGov**: production authority / enforcement boundary
+1. An authenticated operational event starts one bounded workflow; there is no polling loop.
+2. The service binds the event ID to tenant and governed-target identity, fingerprints its evidence, and acquires a transactional single-flight lease.
+3. Firestore returns up to five related Authority Intelligence runs for the same tenant-scoped attention key.
+4. Google ADK invokes Gemini at most once to produce a structured semantic assessment.
+5. Python validates the result and enforces deterministic routing safeguards. A proven governed external mismatch cannot be classified below `AUTHORITY_AT_RISK` and must recommend `INVESTIGATE_RISK`.
+6. Firestore persists the run and severity-aware `operator_attention` state before the service returns its bounded result.
+7. `REVIEW_REQUIRED`, `AUTHORITY_AT_RISK`, and `ACTION_REQUIRED` route to `HUMAN_AUTHORITY_REQUIRED`.
 
-**Important Boundaries & Trust Rules:**
-- **The AI reasons about operations. It does not get to redefine production authority.**
-- **The agent does not own production authority.** Gemini recommends an assessment only.
-- Python enforces constraints. For example, if a change requires human review per policy, it forces `HUMAN_AUTHORITY_REQUIRED`, disregarding unsafe autonomous classifications.
-- **Assessment ≠ Production Approval.** The LLM assessing an event is not the same as the final authoritative human or downstream approval.
-- **Applied ≠ Verified.** Execution is handled by CommerceGov. Taskmaster does not apply changes or verify production state.
-- For one `event_id`, a terminal persisted checkpoint is returned on replay without a second model call (preventing duplicate AI charges or hallucination loops).
-- The store and assessor are dependency-injected; tests use both in-memory and fake implementations and make no network calls.
+Authority Intelligence does not call CommerceGov, approve or apply a change, or write to Shopify.
+
+## Separate Authority Agent proposal path
+
+This is a related workflow, not a continuation of the Authority Intelligence diagram above.
+
+```mermaid
+flowchart LR
+    C["Proposed Change<br/>POST /runs"] --> A["Authority Agent"]
+    A --> M["Google ADK + Gemini<br/>semantic assessment"]
+    M --> D["Deterministic Python<br/>policy enforcement"]
+    D --> O["PROPOSE_ONLY"]
+    O --> CG["CommerceGov<br/>pre-existing external control plane"]
+    CG --> HA["Human-governed<br/>production authority"]
+
+    classDef boundary fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#450a0a;
+    class O,HA boundary;
+```
+
+The Authority Agent returns `READY_FOR_GOVERNED_EXECUTION`, `HUMAN_AUTHORITY_REQUIRED`, or `BLOCKED`. Only a permitted `CONTINUE` result may be handed off as a versioned CommerceGov proposal. The agent still has no approval, apply, Shopify credential, or direct production-write capability.
+
+## Component responsibilities
+
+| Component | Responsibility | Explicit non-responsibility |
+|---|---|---|
+| Cloud Run | Hosts the authenticated, event-driven FastAPI service | Does not create production authority |
+| Google ADK | Runs a bounded, schema-constrained agent interaction | Does not enforce the final authority floor |
+| Vertex AI Gemini (`gemini-3.5-flash`) | Semantically assesses the current event and relevant history | Does not approve or apply changes |
+| Deterministic Python | Validates identity, schema and evidence; controls leases, replay behavior and authority routing | Does not grant itself external authority |
+| Firestore `authority_agent_runs` | Stores durable ownership, attempts, evidence, workflow state and terminal outcomes | Is not merely a log sink |
+| Firestore `operator_attention` | Maintains durable, severity-aware operator-attention state | Does not execute production changes |
+| CommerceGov | External, pre-existing governance control plane for proposal review and production authority | Is not part of the demonstrated Authority Intelligence execution path |
+
+## Deployment and trust boundary
+
+- Google Cloud project: `commercegov-vertex-2026`
+- Cloud Run service: `commercegov-authority-agent`, region `us-central1`
+- Production revision: `commercegov-authority-agent-00019-wb5` with 100% traffic
+- Runtime assessment location: `global`
+- Model: `gemini-3.5-flash`
+- Production persistence: Firestore `(default)` with `USE_IN_MEMORY_STORE=false`
+- Frozen code SHA: `63331870a3e9097e28a855eb05229424d03515ce`
+
+The Taskmaster holds zero Shopify production credentials. Gemini provides semantic reasoning; deterministic code constrains the workflow; humans and the external CommerceGov governance plane retain production authority.

@@ -37,7 +37,7 @@ flowchart TD
 2. The service binds the event ID to tenant and governed-target identity, fingerprints its evidence, and acquires a transactional single-flight lease.
 3. Firestore returns up to five related Authority Intelligence runs for the same tenant-scoped attention key.
 4. Google ADK invokes Gemini at most once to produce a structured semantic assessment.
-5. Python validates the result and enforces deterministic routing safeguards. A proven governed external mismatch cannot be classified below `AUTHORITY_AT_RISK` and must recommend `INVESTIGATE_RISK`.
+5. Python validates the result and enforces deterministic routing safeguards. A proven governed external mismatch cannot be classified below `AUTHORITY_AT_RISK` and therefore routes to `HUMAN_AUTHORITY_REQUIRED`. If Python has to raise a lower-severity Gemini assessment to that floor, it also sets `INVESTIGATE_RISK`; if Gemini already returns `AUTHORITY_AT_RISK` or `ACTION_REQUIRED`, its schema-bounded operator recommendation is retained.
 6. Firestore persists the run and severity-aware `operator_attention` state before the service returns its bounded result.
 7. `REVIEW_REQUIRED`, `AUTHORITY_AT_RISK`, and `ACTION_REQUIRED` route to `HUMAN_AUTHORITY_REQUIRED`.
 

@@ -48,13 +48,7 @@ Operational event
     → bounded routing result
 ```
 
-For a proven governed external production mismatch—`EXTERNAL_PRODUCTION_CHANGE_DETECTED`, a governed mutation class, and unequal current and proposed values—the deterministic Python layer will not allow a result below:
-
-```text
-status:                      HUMAN_AUTHORITY_REQUIRED
-intelligence_classification: AUTHORITY_AT_RISK
-recommended_operator_action: INVESTIGATE_RISK
-```
+For a proven governed external production mismatch—`EXTERNAL_PRODUCTION_CHANGE_DETECTED`, a governed mutation class, and unequal current and proposed values—the result cannot be classified below `AUTHORITY_AT_RISK` and therefore routes to `HUMAN_AUTHORITY_REQUIRED`. If deterministic Python has to raise a lower-severity Gemini assessment to that floor, it also sets `INVESTIGATE_RISK`. If Gemini already returns `AUTHORITY_AT_RISK` or `ACTION_REQUIRED`, its schema-bounded operator recommendation is retained.
 
 Authority Intelligence does **not** submit a CommerceGov proposal, approve or apply a change, or write to Shopify.
 
@@ -68,7 +62,7 @@ Only when deterministic policy permits continuation may this path submit a versi
 
 **Gemini is the semantic reasoning component.** Through Google ADK, it receives the current event plus bounded relevant history and returns a schema-constrained assessment.
 
-**Python enforces the safety properties.** It validates schemas and identity bindings, fingerprints evidence, rejects conflicting event replays, coordinates single-flight leases, limits history, enforces terminal routing, and raises proven governed external mismatches to the `AUTHORITY_AT_RISK` / `INVESTIGATE_RISK` floor. That floor is deterministic system behavior, not a claim about model behavior.
+**Python enforces the safety properties.** It validates schemas and identity bindings, fingerprints evidence, rejects conflicting event replays, coordinates single-flight leases, limits history, enforces terminal routing, and prevents proven governed external mismatches from being classified below `AUTHORITY_AT_RISK`. When Python raises a lower-severity Gemini assessment to that floor, it sets `INVESTIGATE_RISK`; otherwise, Gemini's schema-bounded operator recommendation is retained.
 
 ## Google technology used
 

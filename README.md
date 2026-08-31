@@ -110,21 +110,41 @@ The deployed flow has returned the bounded result:
 
 The complete run is persisted in `authority_agent_runs`, and the related operator-attention record is created or updated in `operator_attention`. No production token or secret is included in this repository or demo instruction.
 
-## Local reproducible demo
+## Reproducible Testing
 
-The deterministic test path exercises the mismatch floor, history-dependent routing, replay identity, and proof that the operational route never calls CommerceGov. It requires no Google credentials or network access.
+The project includes two reproducible paths: an offline deterministic test path that requires no Google credentials, and a Google-backed local path using Vertex AI Gemini and Firestore.
+
+### 1. Clone and install
 
 ```powershell
 git clone https://github.com/vermanthegreat/commercegov-authority-agent-google.git
 cd commercegov-authority-agent-google
+git checkout hackathon/authority-intelligence
 
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+### 2. Run the deterministic reproducible test set
+
+This path exercises the authority-risk floor, history-dependent routing, replay identity, and proof that the operational route never calls CommerceGov. It requires no Google credentials or network access.
+
+```powershell
 .\.venv\Scripts\python.exe -m pytest -q tests/test_operational_endpoint.py::test_external_governed_mismatch_has_authority_risk_floor tests/test_operational_endpoint.py::test_event_identity_binding_replay_and_history tests/test_operational_endpoint.py::test_operational_route_never_uses_commercegov_client tests/test_intelligence.py::test_history_dependent_semantic_correlation
 ```
 
-## Running with Google credentials
+Expected result: all four selected tests pass.
+
+### 3. Run the full test suite
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+The suite covers bounded model invocation, schema validation, identity and fingerprint conflicts, replay behavior, lease ownership, tenant isolation, history-based routing, deterministic external-mismatch enforcement, and Firestore-compatible workflow behavior.
+
+### 4. Run with Google credentials
 
 Authenticate with Application Default Credentials, select a Google Cloud project with Vertex AI and Firestore access, configure a local bearer token, and start the event-driven service:
 
@@ -141,16 +161,22 @@ $env:TASKMASTER_API_TOKEN="<local-demo-token>"
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-Send a representative event to `http://127.0.0.1:8080/events/operational` with that local bearer token. With a Google Cloud project configured and `USE_IN_MEMORY_STORE=false`, the application selects `FirestoreRunStore`.
+### 5. Reproduce the authority workflow
 
-## Tests
+Send a representative event to:
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m pytest
+```text
+POST http://127.0.0.1:8080/events/operational
 ```
 
-The test suite covers bounded model invocation, schema validation, identity and fingerprint conflicts, replay behavior, lease ownership, tenant isolation, history-based routing, deterministic external-mismatch enforcement, and Firestore-compatible workflow behavior.
+Use the bearer token configured in `TASKMASTER_API_TOKEN`. A governed external production mismatch should terminate with the bounded authority outcome:
+
+```text
+status = HUMAN_AUTHORITY_REQUIRED
+intelligence_classification = AUTHORITY_AT_RISK
+```
+
+The resulting workflow state is persisted in Firestore collection `authority_agent_runs`, with related operator-attention state in `operator_attention`.
 
 ## Pre-existing system disclosure
 

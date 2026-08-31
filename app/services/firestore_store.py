@@ -97,8 +97,8 @@ class InMemoryRunStore:
                 return ClaimResult.CLAIM_ACQUIRED, deepcopy(result)
 
             existing = self.runs[key]
-            if existing.get("shop_id") != event.shop_id:
-                # Missing legacy bindings and cross-shop replays both fail closed.
+            if not _event_identity_matches(existing, event):
+                # Missing legacy bindings and cross-tenant replays both fail closed.
                 return ClaimResult.EVENT_ID_CONFLICT, deepcopy(existing)
             if existing.get("fingerprint") != event.fingerprint:
                 return ClaimResult.EVENT_ID_CONFLICT, deepcopy(existing)
@@ -293,8 +293,8 @@ class FirestoreRunStore:
                 return ClaimResult.CLAIM_ACQUIRED, result
 
             existing = snapshot.to_dict()
-            if existing.get("shop_id") != event.shop_id:
-                # Missing legacy bindings and cross-shop replays both fail closed.
+            if not _event_identity_matches(existing, event):
+                # Missing legacy bindings and cross-tenant replays both fail closed.
                 return ClaimResult.EVENT_ID_CONFLICT, existing
             if existing.get("fingerprint") != event.fingerprint:
                 return ClaimResult.EVENT_ID_CONFLICT, existing
@@ -457,6 +457,14 @@ def _require_terminal_status(fields: dict[str, Any]) -> None:
 def _require_shop_id_immutable(run: dict[str, Any], fields: dict[str, Any]) -> None:
     if "shop_id" in fields and fields["shop_id"] != run.get("shop_id"):
         raise ValueError("shop_id is immutable")
+
+
+def _event_identity_matches(run: dict[str, Any], event: ChangeEvent) -> bool:
+    """Event IDs are permanently bound to their tenant and governed target identity."""
+    return all(
+        run.get(field) == getattr(event, field)
+        for field in ("agency_id", "shop_id", "target_type", "target_id", "mutation_class")
+    )
 
 
 def is_terminal(run: dict[str, Any]) -> bool:

@@ -3,15 +3,62 @@ import uuid
 from typing import Any
 import pydantic
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.agent.intelligence_agent import IntelligenceAssessor
-from app.models import ChangeEvent, PipelineNamespace, IntelligenceClassification, ClaimResult, WorkflowStatus
+from app.models import ChangeEvent, PipelineNamespace, IntelligenceClassification, OperatorAction, ClaimResult, WorkflowStatus
 from app.services.event_parser import EventParseError, parse_change_event
 from app.services.firestore_store import RunStore
+from app.routes.events import get_taskmaster_token
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
+
+
+def _is_proven_governed_external_mismatch(event: ChangeEvent) -> bool:
+    """Return true only for an externally detected mismatch in its governed field."""
+    governed_field = event.policy_context.get("governed_field")
+    return (
+        event.policy_context.get("event_type") == "EXTERNAL_PRODUCTION_CHANGE_DETECTED"
+        and isinstance(governed_field, str)
+        and bool(governed_field)
+        and event.mutation_class == f"{event.target_type}.{governed_field}"
+        and event.current_value != event.proposed_value
+    )
+
+
+def _apply_external_mismatch_floor(event: ChangeEvent, assessment: Any) -> Any:
+    """Prevent proven governed production divergence from being classified as noise."""
+    severity = {
+        IntelligenceClassification.NO_ACTION_REQUIRED: 0,
+        IntelligenceClassification.INFORMATIONAL: 1,
+        IntelligenceClassification.REVIEW_REQUIRED: 2,
+        IntelligenceClassification.AUTHORITY_AT_RISK: 3,
+        IntelligenceClassification.ACTION_REQUIRED: 4,
+    }
+    if not _is_proven_governed_external_mismatch(event):
+        return assessment
+    if severity[assessment.classification] >= severity[IntelligenceClassification.AUTHORITY_AT_RISK]:
+        return assessment
+    return assessment.model_copy(
+        update={
+            "classification": IntelligenceClassification.AUTHORITY_AT_RISK,
+            "reason": f"{assessment.reason} Proven governed external production mismatch requires operator attention.",
+            "evidence_refs": list(dict.fromkeys([*assessment.evidence_refs, event.event_id])),
+            "recommended_operator_action": OperatorAction.INVESTIGATE_RISK,
+        }
+    )
+
+
+def operational_read_projection(run: dict[str, Any]) -> dict[str, Any]:
+    """Bounded public contract for Authority Intelligence event ingestion."""
+    fields = (
+        "event_id", "agency_id", "shop_id", "target_type", "target_id",
+        "mutation_class", "status", "intelligence_classification", "summary",
+        "reason", "affected_scope", "evidence_refs", "recommended_operator_action",
+        "attention_key",
+    )
+    return {field: run.get(field) for field in fields}
 
 async def process_operational_event(event: ChangeEvent, store: RunStore, assessor: IntelligenceAssessor) -> dict[str, Any]:
     owner_id = str(uuid.uuid4())
@@ -72,6 +119,8 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
             pass
         raise RuntimeError("Intelligence assessment outcome is unknown") from exc
 
+    assessment = _apply_external_mismatch_floor(event, assessment)
+
     # Deterministic enforcement
     if assessment.classification not in [e.value for e in IntelligenceClassification]:
         store.settle(
@@ -94,7 +143,8 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
             summary=assessment.summary,
             reason=assessment.reason,
             affected_scope=assessment.affected_scope,
-            evidence_refs=assessment.evidence_refs
+            evidence_refs=assessment.evidence_refs,
+            recommended_operator_action=assessment.recommended_operator_action.value,
         )
         return settled
 
@@ -150,19 +200,24 @@ async def process_operational_event(event: ChangeEvent, store: RunStore, assesso
         reason=assessment.reason,
         affected_scope=assessment.affected_scope,
         evidence_refs=assessment.evidence_refs,
+        recommended_operator_action=assessment.recommended_operator_action.value,
         attention_key=attention_key
     )
     return settled
 
 
 @router.post("/events/operational")
-async def post_operational_change(request: Request) -> dict[str, Any]:
+async def post_operational_change(
+    request: Request,
+    _token: str = Depends(get_taskmaster_token),
+) -> dict[str, Any]:
     try:
         payload = await request.json()
         event = parse_change_event(payload)
     except (ValueError, EventParseError):
         raise HTTPException(status_code=400, detail="Invalid operational event")
     try:
-        return await process_operational_event(event, request.app.state.run_store, request.app.state.intelligence_assessor)
+        run = await process_operational_event(event, request.app.state.run_store, request.app.state.intelligence_assessor)
+        return operational_read_projection(run)
     except RuntimeError:
         raise HTTPException(status_code=502, detail="Intelligence assessment failed")
